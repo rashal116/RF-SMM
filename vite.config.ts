@@ -7,6 +7,20 @@ function smmApiProxyPlugin() {
   return {
     name: 'smm-api-proxy',
     configureServer(server: any) {
+      server.middlewares.use('/api/smm/services', async (req: any, res: any) => {
+        try {
+          const targetUrl = 'https://my.smmgen.com/api/v2?key=abb6b46205ede0b57a7c53580646fc7a&action=services';
+          const response = await fetch(targetUrl);
+          const text = await response.text();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(text);
+        } catch (err: any) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err.message || 'Services fetch failed' }));
+        }
+      });
+
       server.middlewares.use('/api/smm/order', async (req: any, res: any) => {
         try {
           if (req.method === 'GET') {

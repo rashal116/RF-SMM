@@ -58,6 +58,19 @@ interface UserSession {
   name: string;
 }
 
+// Legacy Service ID Mapper to ensure SMMGen API receives real working service IDs
+const SERVICE_ID_MAP: Record<string, string> = {
+  '101': '15806', // FB Followers (30D Refill)
+  '102': '16869', // FB Post Likes
+  '201': '19382', // IG Followers
+  '202': '13330', // IG Likes
+  '301': '16393', // TikTok Followers
+  '302': '16356', // TikTok Likes
+  '401': '9622',  // YouTube Subscribers
+  '402': '18918', // YouTube Views
+  '501': '18384'  // Telegram Members
+};
+
 export default function App() {
   // Splash & Auth State
   const [showSplash, setShowSplash] = useState(true);
@@ -226,7 +239,7 @@ export default function App() {
     return () => unsubscribe();
   }, [isLoggedIn, currentUser]);
 
-  // 3. Realtime Services Loading & Seeding Defaults if empty
+  // 3. Realtime Services Loading & Seeding Defaults
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'services'), async (snapshot) => {
       if (snapshot.empty) {
@@ -239,12 +252,31 @@ export default function App() {
 
       const list: ServiceData[] = [];
       const catsSet = new Set<string>();
+      const existingNames = new Set<string>();
+      const existingApiIds = new Set<string>();
 
       snapshot.forEach((d) => {
         const data = { id: d.id, ...d.data() } as ServiceData;
+        existingNames.add(data.name);
+        if (data.apiServiceId) existingApiIds.add(data.apiServiceId);
+
+        const defSvc = DEFAULT_SERVICES.find(
+          (s) => s.name === data.name || (s.apiServiceId && s.apiServiceId === data.apiServiceId)
+        );
+        if (defSvc && data.price < defSvc.price) {
+          data.price = defSvc.price;
+          updateDoc(doc(db, 'services', d.id), { price: defSvc.price }).catch(() => {});
+        }
         list.push(data);
         if (data.category) catsSet.add(data.category);
       });
+
+      // Auto-add missing default services into Firestore
+      for (const defSvc of DEFAULT_SERVICES) {
+        if (!existingNames.has(defSvc.name) && !existingApiIds.has(defSvc.apiServiceId)) {
+          addDoc(collection(db, 'services'), defSvc).catch(() => {});
+        }
+      }
 
       setAllServices(list);
       setCategories(Array.from(catsSet).sort());
@@ -537,17 +569,20 @@ export default function App() {
     qty: number
   ): Promise<{ error?: string; order?: number; status?: string }> => {
     const apiKey = 'abb6b46205ede0b57a7c53580646fc7a';
-    const targetUrl = `https://my.smmgen.com/api/v2?key=${apiKey}&action=add&service=${encodeURIComponent(
-      serviceId
-    )}&link=${encodeURIComponent(link)}&quantity=${encodeURIComponent(qty)}`;
+    const mappedService = SERVICE_ID_MAP[serviceId] || serviceId;
+    const finalService = mappedService && mappedService.length >= 4 ? mappedService : '15806';
 
-    // 1. Try relative GET proxy endpoint /api/smm/order (Works on Netlify via _redirects and Vite dev server)
+    const queryParams = new URLSearchParams({
+      key: apiKey,
+      action: 'add',
+      service: String(finalService),
+      link: String(link),
+      quantity: String(qty)
+    }).toString();
+
+    // 1. Try Netlify / Vite Proxy GET endpoint
     try {
-      const proxyGetUrl = `/api/smm/order?key=${apiKey}&action=add&service=${encodeURIComponent(
-        serviceId
-      )}&link=${encodeURIComponent(link)}&quantity=${encodeURIComponent(qty)}`;
-
-      const res = await fetch(proxyGetUrl);
+      const res = await fetch(`/api/smm/order?${queryParams}`);
       if (res.ok) {
         const text = await res.text();
         if (text && text.trim().startsWith('{')) {
@@ -559,13 +594,13 @@ export default function App() {
       console.warn('GET proxy attempt failed:', e);
     }
 
-    // 2. Try relative POST proxy endpoint /api/smm/order (Works on Vite server)
+    // 2. Try Netlify / Vite Proxy POST endpoint
     try {
       const proxyRes = await fetch('/api/smm/order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          service: serviceId,
+          service: finalService,
           link,
           quantity: qty,
           apiKey,
@@ -584,36 +619,9 @@ export default function App() {
       console.warn('POST proxy attempt failed:', e);
     }
 
-    // 3. Fallback: corsproxy.io
+    // 3. Fallback: Direct fetch
     try {
-      const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`);
-      if (res.ok) {
-        const text = await res.text();
-        if (text && text.trim().startsWith('{')) {
-          const json = JSON.parse(text);
-          if (json.order || json.error) return json;
-        }
-      }
-    } catch (e) {
-      console.warn('Corsproxy failed:', e);
-    }
-
-    // 4. Fallback: allorigins.win
-    try {
-      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
-      if (res.ok) {
-        const text = await res.text();
-        if (text && text.trim().startsWith('{')) {
-          const json = JSON.parse(text);
-          if (json.order || json.error) return json;
-        }
-      }
-    } catch (e) {
-      console.warn('Allorigins failed:', e);
-    }
-
-    // 5. Fallback: Direct fetch
-    try {
+      const targetUrl = `https://my.smmgen.com/api/v2?${queryParams}`;
       const res = await fetch(targetUrl);
       if (res.ok) {
         const json = await res.json();
@@ -623,7 +631,7 @@ export default function App() {
       console.warn('Direct fetch failed:', e);
     }
 
-    return { error: 'API connection error. Check Netlify proxy configuration.' };
+    return { error: 'API connection error. Please check your netlify redirect setup.' };
   };
 
   // Place Order Action
@@ -733,7 +741,7 @@ export default function App() {
       const sname = currentService.name;
       const link = targetLink.trim();
       const qty = quantity;
-      const apiSvcId = currentService.apiServiceId || '101';
+      const apiSvcId = currentService.apiServiceId || '15806';
 
       // 1. Create order document in Firestore
       const orderRef = await addDoc(collection(db, 'orders'), {

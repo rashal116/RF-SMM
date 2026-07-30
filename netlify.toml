@@ -9,6 +9,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/smm/services"
+  to = "https://my.smmgen.com/api/v2?key=abb6b46205ede0b57a7c53580646fc7a&action=services"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
