@@ -536,8 +536,31 @@ export default function App() {
     link: string,
     qty: number
   ): Promise<{ error?: string; order?: number; status?: string }> => {
+    const apiKey = 'abb6b46205ede0b57a7c53580646fc7a';
+    const targetUrl = `https://my.smmgen.com/api/v2?key=${apiKey}&action=add&service=${encodeURIComponent(
+      serviceId
+    )}&link=${encodeURIComponent(link)}&quantity=${encodeURIComponent(qty)}`;
+
+    // 1. Try relative GET proxy endpoint /api/smm/order (Works on Netlify via _redirects and Vite dev server)
     try {
-      // First try our server proxy /api/smm/order
+      const proxyGetUrl = `/api/smm/order?key=${apiKey}&action=add&service=${encodeURIComponent(
+        serviceId
+      )}&link=${encodeURIComponent(link)}&quantity=${encodeURIComponent(qty)}`;
+
+      const res = await fetch(proxyGetUrl);
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.trim().startsWith('{')) {
+          const json = JSON.parse(text);
+          if (json.order || json.error) return json;
+        }
+      }
+    } catch (e) {
+      console.warn('GET proxy attempt failed:', e);
+    }
+
+    // 2. Try relative POST proxy endpoint /api/smm/order (Works on Vite server)
+    try {
       const proxyRes = await fetch('/api/smm/order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -545,34 +568,62 @@ export default function App() {
           service: serviceId,
           link,
           quantity: qty,
-          apiKey: 'abb6b46205ede0b57a7c53580646fc7a',
+          apiKey,
           apiBase: 'https://my.smmgen.com/api/v2'
         })
       });
 
       if (proxyRes.ok) {
-        const data = await proxyRes.json();
-        return data;
+        const text = await proxyRes.text();
+        if (text && text.trim().startsWith('{')) {
+          const json = JSON.parse(text);
+          if (json.order || json.error) return json;
+        }
       }
-    } catch (proxyErr) {
-      console.warn('Proxy route failed, attempting direct fetch...', proxyErr);
+    } catch (e) {
+      console.warn('POST proxy attempt failed:', e);
     }
 
-    // Direct fetch fallback with CORS proxy
+    // 3. Fallback: corsproxy.io
     try {
-      const targetUrl = `https://my.smmgen.com/api/v2?key=abb6b46205ede0b57a7c53580646fc7a&action=add&service=${encodeURIComponent(
-        serviceId
-      )}&link=${encodeURIComponent(link)}&quantity=${encodeURIComponent(qty)}`;
+      const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`);
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.trim().startsWith('{')) {
+          const json = JSON.parse(text);
+          if (json.order || json.error) return json;
+        }
+      }
+    } catch (e) {
+      console.warn('Corsproxy failed:', e);
+    }
 
+    // 4. Fallback: allorigins.win
+    try {
       const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
       if (res.ok) {
-        return await res.json();
+        const text = await res.text();
+        if (text && text.trim().startsWith('{')) {
+          const json = JSON.parse(text);
+          if (json.order || json.error) return json;
+        }
       }
-    } catch (directErr: any) {
-      console.error('Direct API call failed:', directErr);
+    } catch (e) {
+      console.warn('Allorigins failed:', e);
     }
 
-    return { error: 'API connection timeout' };
+    // 5. Fallback: Direct fetch
+    try {
+      const res = await fetch(targetUrl);
+      if (res.ok) {
+        const json = await res.json();
+        return json;
+      }
+    } catch (e) {
+      console.warn('Direct fetch failed:', e);
+    }
+
+    return { error: 'API connection error. Check Netlify proxy configuration.' };
   };
 
   // Place Order Action
