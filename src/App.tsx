@@ -72,6 +72,39 @@ const SERVICE_ID_MAP: Record<string, string> = {
   '501': '18384'  // Telegram Members
 };
 
+// Social Platforms Meta with icons and colors
+const SOCIAL_PLATFORMS = [
+  { id: 'facebook', name: 'Facebook', icon: 'fab fa-facebook-f', color: '#1877F2', bg: 'from-blue-600/25 to-blue-500/10' },
+  { id: 'instagram', name: 'Instagram', icon: 'fab fa-instagram', color: '#E4405F', bg: 'from-pink-600/25 to-purple-600/10' },
+  { id: 'tiktok', name: 'TikTok', icon: 'fab fa-tiktok', color: '#00F2FE', bg: 'from-cyan-500/25 to-pink-500/10' },
+  { id: 'youtube', name: 'YouTube', icon: 'fab fa-youtube', color: '#FF0000', bg: 'from-red-600/25 to-red-500/10' },
+  { id: 'telegram', name: 'Telegram', icon: 'fab fa-telegram-plane', color: '#229ED9', bg: 'from-sky-500/25 to-blue-500/10' },
+  { id: 'twitter', name: 'Twitter / X', icon: 'fab fa-twitter', color: '#1DA1F2', bg: 'from-slate-700/30 to-blue-500/10' },
+  { id: 'website', name: 'Website / SEO', icon: 'fas fa-globe', color: '#10B981', bg: 'from-emerald-500/25 to-teal-500/10' },
+  { id: 'whatsapp', name: 'WhatsApp', icon: 'fab fa-whatsapp', color: '#25D366', bg: 'from-emerald-600/25 to-green-500/10' },
+  { id: 'snapchat', name: 'Snapchat', icon: 'fab fa-snapchat-ghost', color: '#FFFC00', bg: 'from-yellow-400/25 to-amber-500/10' },
+  { id: 'spotify', name: 'Spotify', icon: 'fab fa-spotify', color: '#1DB954', bg: 'from-green-500/25 to-emerald-500/10' },
+  { id: 'discord', name: 'Discord', icon: 'fab fa-discord', color: '#5865F2', bg: 'from-indigo-500/25 to-blue-500/10' },
+  { id: 'linkedin', name: 'LinkedIn', icon: 'fab fa-linkedin-in', color: '#0A66C2', bg: 'from-blue-700/25 to-sky-500/10' },
+];
+
+function getPlatformMeta(name: string) {
+  const str = (name || '').toLowerCase();
+  if (str.includes('fb') || str.includes('facebook')) return SOCIAL_PLATFORMS[0];
+  if (str.includes('ig') || str.includes('instagram')) return SOCIAL_PLATFORMS[1];
+  if (str.includes('tiktok') || str.includes('tt')) return SOCIAL_PLATFORMS[2];
+  if (str.includes('yt') || str.includes('youtube')) return SOCIAL_PLATFORMS[3];
+  if (str.includes('telegram') || str.includes('tg')) return SOCIAL_PLATFORMS[4];
+  if (str.includes('twitter') || str.includes('x') || str.includes('tweet')) return SOCIAL_PLATFORMS[5];
+  if (str.includes('web') || str.includes('seo') || str.includes('website') || str.includes('traffic')) return SOCIAL_PLATFORMS[6];
+  if (str.includes('whatsapp') || str.includes('wa')) return SOCIAL_PLATFORMS[7];
+  if (str.includes('snapchat') || str.includes('sc')) return SOCIAL_PLATFORMS[8];
+  if (str.includes('spotify')) return SOCIAL_PLATFORMS[9];
+  if (str.includes('discord')) return SOCIAL_PLATFORMS[10];
+  if (str.includes('linkedin')) return SOCIAL_PLATFORMS[11];
+  return { id: 'smm', name: 'SMM Service', icon: 'fas fa-rocket', color: '#3B82F6', bg: 'from-blue-500/20 to-indigo-500/10' };
+}
+
 export default function App() {
   // Splash & Auth State
   const [showSplash, setShowSplash] = useState(true);
@@ -542,9 +575,59 @@ export default function App() {
     haptic('light');
     setSelectedCategory(cat);
     setCatErr('');
-    setSelectedServiceId('');
-    setCurrentService(null);
-    setSvcErr('');
+    
+    // Auto select first service in this category for instant order flow
+    const filtered = allServices.filter((s) => s.category === cat);
+    if (filtered.length > 0) {
+      setSelectedServiceId(filtered[0].id);
+      setCurrentService(filtered[0]);
+      setQuantity(filtered[0].min || 1000);
+      setSvcErr('');
+    } else {
+      setSelectedServiceId('');
+      setCurrentService(null);
+      setSvcErr('');
+    }
+  };
+
+  // Direct Platform Logo Click Handler (Auto-select category & smooth scroll to order form)
+  const handleSelectPlatformLogo = (platformId: string) => {
+    haptic('heavy');
+    const pLower = platformId.toLowerCase();
+    
+    // Search categories for closest matching platform
+    const match = categories.find((c) => {
+      const cLower = c.toLowerCase();
+      if (pLower === 'facebook' && (cLower.includes('facebook') || cLower.includes('fb'))) return true;
+      if (pLower === 'instagram' && (cLower.includes('instagram') || cLower.includes('ig'))) return true;
+      if (pLower === 'tiktok' && (cLower.includes('tiktok') || cLower.includes('tt'))) return true;
+      if (pLower === 'youtube' && (cLower.includes('youtube') || cLower.includes('yt'))) return true;
+      if (pLower === 'telegram' && (cLower.includes('telegram') || cLower.includes('tg'))) return true;
+      if (pLower === 'twitter' && (cLower.includes('twitter') || cLower.includes('x'))) return true;
+      if (pLower === 'website' && (cLower.includes('web') || cLower.includes('seo') || cLower.includes('website') || cLower.includes('traffic'))) return true;
+      if (pLower === 'whatsapp' && (cLower.includes('whatsapp') || cLower.includes('wa'))) return true;
+      if (pLower === 'snapchat' && (cLower.includes('snapchat') || cLower.includes('sc'))) return true;
+      if (pLower === 'spotify' && cLower.includes('spotify')) return true;
+      if (pLower === 'discord' && cLower.includes('discord')) return true;
+      if (pLower === 'linkedin' && cLower.includes('linkedin')) return true;
+      return cLower.includes(pLower);
+    });
+
+    if (match) {
+      handleCategoryChange(match);
+      showToast(`Selected ${match}`, 'info');
+    } else if (categories.length > 0) {
+      // Fallback if category name in db differs
+      handleCategoryChange(categories[0]);
+    }
+
+    // Scroll smoothly to order form
+    setTimeout(() => {
+      const el = document.getElementById('order-form');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 80);
   };
 
   // Service Change
@@ -561,6 +644,36 @@ export default function App() {
 
   // Cost calculation
   const calculatedCost = currentService ? (currentService.price * quantity) / 1000 : 0;
+
+  // Order Stepper Progress Tracker ("রোগ" / Dynamic Progress Track)
+  const isStep1Done = Boolean(selectedCategory);
+  const isStep2Done = Boolean(selectedServiceId && currentService);
+  const isStep3Done = Boolean(targetLink.trim().length >= 4);
+  const isStep4Done = Boolean(
+    quantity > 0 &&
+      currentService &&
+      quantity >= currentService.min &&
+      (!currentService.max || quantity <= currentService.max)
+  );
+
+  let orderStepProgress = 10;
+  let activeStepIndex = 1;
+  if (!isStep1Done) {
+    orderStepProgress = 15;
+    activeStepIndex = 1;
+  } else if (!isStep2Done) {
+    orderStepProgress = 35;
+    activeStepIndex = 2;
+  } else if (!isStep3Done) {
+    orderStepProgress = 60;
+    activeStepIndex = 3;
+  } else if (!isStep4Done) {
+    orderStepProgress = 85;
+    activeStepIndex = 4;
+  } else {
+    orderStepProgress = 100;
+    activeStepIndex = 5;
+  }
 
   // SMMGen API Call Helper
   const placeSmmGenOrderApi = async (
@@ -1355,52 +1468,152 @@ export default function App() {
           {/* HOME TAB */}
           {activeTab === 'home' && (
             <section className="px-5 mt-5">
-              <div className="grid grid-cols-4 gap-2.5 mb-6">
-                <div className="social-icon-box icon-fb">
-                  <i className="fab fa-facebook-f"></i>
+              {/* SOCIAL PLATFORMS SELECTOR GRID */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-2.5 px-1">
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-300 flex items-center gap-1.5">
+                    <i className="fas fa-layer-group text-blue-400"></i>Select Platform (প্ল্যাটফর্ম বাছুন)
+                  </span>
+                  <span className="text-[9px] text-blue-400 font-bold bg-blue-500/10 px-2.5 py-0.5 rounded-full border border-blue-500/20">
+                    Tap to Select ⚡
+                  </span>
                 </div>
-                <div className="social-icon-box icon-ig">
-                  <i className="fab fa-instagram"></i>
-                </div>
-                <div className="social-icon-box icon-tt">
-                  <i className="fab fa-tiktok"></i>
-                </div>
-                <div className="social-icon-box icon-yt">
-                  <i className="fab fa-youtube"></i>
-                </div>
-                <div className="social-icon-box icon-tw">
-                  <i className="fab fa-twitter"></i>
-                </div>
-                <div className="social-icon-box icon-li">
-                  <i className="fab fa-linkedin-in"></i>
-                </div>
-                <div className="social-icon-box icon-sc">
-                  <i className="fab fa-snapchat-ghost"></i>
-                </div>
-                <div className="social-icon-box icon-tp">
-                  <i className="fab fa-telegram-plane"></i>
+
+                <div className="grid grid-cols-4 sm:grid-cols-6 gap-2.5">
+                  {SOCIAL_PLATFORMS.map((platform) => {
+                    const isSelected = selectedCategory && (
+                      selectedCategory.toLowerCase().includes(platform.id) ||
+                      (platform.id === 'facebook' && selectedCategory.toLowerCase().includes('fb')) ||
+                      (platform.id === 'instagram' && selectedCategory.toLowerCase().includes('ig')) ||
+                      (platform.id === 'tiktok' && selectedCategory.toLowerCase().includes('tt')) ||
+                      (platform.id === 'youtube' && selectedCategory.toLowerCase().includes('yt')) ||
+                      (platform.id === 'telegram' && selectedCategory.toLowerCase().includes('tg'))
+                    );
+
+                    return (
+                      <button
+                        key={platform.id}
+                        onClick={() => handleSelectPlatformLogo(platform.id)}
+                        className={`group relative flex flex-col items-center justify-center p-2.5 rounded-2xl border transition-all duration-200 cursor-pointer active:scale-90 ${
+                          isSelected
+                            ? 'bg-gradient-to-b ' + platform.bg + ' border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.4)] ring-2 ring-blue-400/40'
+                            : 'bg-white/5 border-white/10 hover:border-white/20 hover:bg-white/10'
+                        }`}
+                      >
+                        <div
+                          className="w-10 h-10 rounded-xl flex items-center justify-center text-xl transition-transform group-hover:scale-110"
+                          style={{ color: platform.color }}
+                        >
+                          <i className={platform.icon}></i>
+                        </div>
+                        <span className="text-[9px] font-bold text-slate-300 mt-1 truncate max-w-full">
+                          {platform.name.split(' ')[0]}
+                        </span>
+                        {isSelected && (
+                          <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-blue-500 rounded-full flex items-center justify-center text-white text-[7px] border border-[#030712]">
+                            ✓
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="glass-card p-5 mb-5">
+              {/* NEW ORDER CARD WITH STEPPER TRACK ("রোগ") */}
+              <div id="order-form" className="glass-card p-5 mb-5 relative overflow-hidden border border-blue-500/20 shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
+                {/* Header */}
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 bg-blue-500/15 rounded-xl flex items-center justify-center text-blue-400">
+                    <div className="w-9 h-9 bg-blue-500/15 rounded-xl flex items-center justify-center text-blue-400 shadow-inner">
                       <i className="fas fa-cart-plus text-sm"></i>
                     </div>
-                    <h3 className="font-extrabold text-sm text-white">New Order</h3>
+                    <div>
+                      <h3 className="font-extrabold text-sm text-white">New Order (নতুন অর্ডার)</h3>
+                      <p className="text-[9px] font-semibold text-slate-400">Step-by-step automatic dispatch</p>
+                    </div>
                   </div>
-                  <div className="text-[8px] font-black text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-md tracking-wider">
-                    INSTANT
+                  <div className="text-[8px] font-black text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-md tracking-wider border border-blue-500/20">
+                    INSTANT ⚡
+                  </div>
+                </div>
+
+                {/* DYNAMIC PROGRESS STEPPER TRACK ("রোগ" / STEP BAR) */}
+                <div className="mb-5 bg-slate-900/80 border border-white/10 rounded-2xl p-3.5 backdrop-blur-md">
+                  <div className="flex items-center justify-between mb-2 px-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-blue-300">
+                        Order Process (অর্ডার প্রসেস)
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold text-slate-300">
+                      Step {activeStepIndex}/5 ({orderStepProgress}%)
+                    </span>
+                  </div>
+
+                  {/* Dynamic Progress Line Track ("রোগ") */}
+                  <div className="relative w-full h-2.5 bg-slate-800 rounded-full overflow-hidden mb-3.5 border border-white/5">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400 transition-all duration-500 ease-out rounded-full shadow-[0_0_12px_rgba(59,130,246,0.8)]"
+                      style={{ width: `${orderStepProgress}%` }}
+                    ></div>
+                  </div>
+
+                  {/* Step Nodes */}
+                  <div className="grid grid-cols-5 gap-1 text-center">
+                    {[
+                      { step: 1, label: 'ক্যাটাগরি', icon: 'fas fa-folder-open', done: isStep1Done },
+                      { step: 2, label: 'সার্ভিস', icon: 'fas fa-magic', done: isStep2Done },
+                      { step: 3, label: 'লিঙ্ক', icon: 'fas fa-link', done: isStep3Done },
+                      { step: 4, label: 'পরিমাণ', icon: 'fas fa-hashtag', done: isStep4Done },
+                      { step: 5, label: 'কনফার্ম', icon: 'fas fa-check-circle', done: isStep4Done },
+                    ].map((s) => {
+                      const isActive = activeStepIndex === s.step;
+                      return (
+                        <div key={s.step} className="flex flex-col items-center">
+                          <div
+                            className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all duration-300 ${
+                              s.done
+                                ? 'bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.5)] scale-105'
+                                : isActive
+                                ? 'bg-blue-500 text-white shadow-[0_0_12px_rgba(59,130,246,0.8)] ring-2 ring-blue-400/50 scale-110'
+                                : 'bg-slate-800 text-slate-500 border border-white/5'
+                            }`}
+                          >
+                            {s.done ? <i className="fas fa-check text-[9px]"></i> : <i className={`${s.icon} text-[9px]`}></i>}
+                          </div>
+                          <span
+                            className={`text-[8px] font-bold mt-1 tracking-tight ${
+                              s.done
+                                ? 'text-emerald-400'
+                                : isActive
+                                ? 'text-blue-300 font-extrabold'
+                                : 'text-slate-500'
+                            }`}
+                          >
+                            {s.label}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   {/* Category Dropdown */}
                   <div>
-                    <label className="form-label">
-                      <i className="fas fa-folder-open mr-1 text-[8px]"></i> 1. Category
-                    </label>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="form-label mb-0">
+                        <i className="fas fa-folder-open mr-1 text-[8px]"></i> 1. Category
+                      </label>
+                      {selectedCategory && (
+                        <div className="flex items-center gap-1 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded text-[9px] text-blue-300 font-bold">
+                          <i className={getPlatformMeta(selectedCategory).icon}></i>
+                          <span>{getPlatformMeta(selectedCategory).name}</span>
+                        </div>
+                      )}
+                    </div>
                     <div className="relative">
                       <select
                         className="input-modern appearance-none pr-8"
@@ -1481,7 +1694,7 @@ export default function App() {
                         <div className="text-center">
                           <p className="text-[8px] font-bold text-blue-400/70 uppercase">Rate</p>
                           <p className="font-extrabold text-sm text-blue-300">
-                            {currentService.price}/1k
+                            ৳ {currentService.price}/1k
                           </p>
                         </div>
                       </div>
@@ -1496,7 +1709,7 @@ export default function App() {
                     <input
                       type="text"
                       className="input-modern"
-                      placeholder="https://facebook.com/username"
+                      placeholder="https://facebook.com/username or link..."
                       value={targetLink}
                       onChange={(e) => {
                         setTargetLink(e.target.value);
@@ -1554,7 +1767,11 @@ export default function App() {
                   <button
                     onClick={handlePlaceOrderClick}
                     disabled={orderSubmitting}
-                    className="btn-primary-solid flex items-center justify-center gap-2"
+                    className={`btn-primary-solid flex items-center justify-center gap-2 transition-all ${
+                      isStep4Done
+                        ? 'shadow-[0_8px_25px_rgba(59,130,246,0.6)] ring-2 ring-blue-400/50'
+                        : ''
+                    }`}
                   >
                     {orderSubmitting ? (
                       <span className="loading-spinner"></span>
@@ -1620,6 +1837,8 @@ export default function App() {
                       stIcon = 'fa-times-circle';
                     }
 
+                    const meta = getPlatformMeta(o.service);
+
                     return (
                       <div key={o.id} className="glass-card p-4">
                         <div className="flex justify-between items-start mb-2">
@@ -1631,7 +1850,15 @@ export default function App() {
                             {o.status || 'Pending'}
                           </span>
                         </div>
-                        <h4 className="font-bold text-xs text-white">{o.service}</h4>
+                        <div className="flex items-center gap-2 my-1">
+                          <div
+                            className="w-6 h-6 rounded-lg flex items-center justify-center text-xs flex-shrink-0 border border-white/10"
+                            style={{ color: meta.color, backgroundColor: `${meta.color}25` }}
+                          >
+                            <i className={meta.icon}></i>
+                          </div>
+                          <h4 className="font-bold text-xs text-white leading-tight">{o.service}</h4>
+                        </div>
                         <p className="text-[10px] text-slate-400 truncate mt-0.5 font-mono">
                           {o.link}
                         </p>
