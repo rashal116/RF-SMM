@@ -7,6 +7,7 @@ import {
   setDoc,
   updateDoc,
   addDoc,
+  deleteDoc,
   serverTimestamp,
   query,
   where,
@@ -120,13 +121,26 @@ export default function App() {
   const [ordersList, setOrdersList] = useState<OrderData[]>([]);
 
   // Funds State
-  const [selectedMethod, setSelectedMethod] = useState<'bkash' | 'nagad' | 'rocket'>('bkash');
+  const [selectedMethod, setSelectedMethod] = useState<'bkash' | 'nagad' | 'rocket' | 'binance' | 'usdt_bep20'>('bkash');
   const [depositAmount, setDepositAmount] = useState<string>('');
   const [depositTrxId, setDepositTrxId] = useState<string>('');
   const [depAmtErr, setDepAmtErr] = useState('');
   const [depTrxErr, setDepTrxErr] = useState('');
   const [depositSubmitting, setDepositSubmitting] = useState(false);
   const [depositHistory, setDepositHistory] = useState<DepositRequest[]>([]);
+  const [allDepositRequests, setAllDepositRequests] = useState<DepositRequest[]>([]);
+
+  // Admin Manual Service Form State
+  const [adminCategory, setAdminCategory] = useState('');
+  const [adminName, setAdminName] = useState('');
+  const [adminPrice, setAdminPrice] = useState('');
+  const [adminMin, setAdminMin] = useState('100');
+  const [adminMax, setAdminMax] = useState('100000');
+  const [adminDesc, setAdminDesc] = useState('');
+  const [adminApiServiceId, setAdminApiServiceId] = useState('');
+  const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
+  const [adminSearch, setAdminSearch] = useState('');
+  const [adminSubmitting, setAdminSubmitting] = useState(false);
 
   // Modal Confirm State
   const [modalConfig, setModalConfig] = useState<{
@@ -239,44 +253,17 @@ export default function App() {
     return () => unsubscribe();
   }, [isLoggedIn, currentUser]);
 
-  // 3. Realtime Services Loading & Seeding Defaults
+  // 3. Realtime Services Loading (Pure Read - No Auto Save or Auto Seed)
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'services'), async (snapshot) => {
-      if (snapshot.empty) {
-        // Seed initial services in Firestore so user can order instantly
-        for (const svc of DEFAULT_SERVICES) {
-          await addDoc(collection(db, 'services'), svc);
-        }
-        return;
-      }
-
+    const unsub = onSnapshot(collection(db, 'services'), (snapshot) => {
       const list: ServiceData[] = [];
       const catsSet = new Set<string>();
-      const existingNames = new Set<string>();
-      const existingApiIds = new Set<string>();
 
       snapshot.forEach((d) => {
         const data = { id: d.id, ...d.data() } as ServiceData;
-        existingNames.add(data.name);
-        if (data.apiServiceId) existingApiIds.add(data.apiServiceId);
-
-        const defSvc = DEFAULT_SERVICES.find(
-          (s) => s.name === data.name || (s.apiServiceId && s.apiServiceId === data.apiServiceId)
-        );
-        if (defSvc && data.price < defSvc.price) {
-          data.price = defSvc.price;
-          updateDoc(doc(db, 'services', d.id), { price: defSvc.price }).catch(() => {});
-        }
         list.push(data);
         if (data.category) catsSet.add(data.category);
       });
-
-      // Auto-add missing default services into Firestore
-      for (const defSvc of DEFAULT_SERVICES) {
-        if (!existingNames.has(defSvc.name) && !existingApiIds.has(defSvc.apiServiceId)) {
-          addDoc(collection(db, 'services'), defSvc).catch(() => {});
-        }
-      }
 
       setAllServices(list);
       setCategories(Array.from(catsSet).sort());
@@ -304,7 +291,7 @@ export default function App() {
     return () => unsub();
   }, [isLoggedIn, currentUser]);
 
-  // 5. Realtime Deposit Requests Sync
+  // 5. Realtime User Deposit Requests Sync
   useEffect(() => {
     if (!isLoggedIn || !currentUser?.uid) return;
 
@@ -324,6 +311,19 @@ export default function App() {
 
     return () => unsub();
   }, [isLoggedIn, currentUser]);
+
+  // 6. Realtime All Deposit Requests Sync (Admin View)
+  useEffect(() => {
+    const q = query(collection(db, 'deposit_requests'), orderBy('timestamp', 'desc'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const list: DepositRequest[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...docSnap.data() } as DepositRequest);
+      });
+      setAllDepositRequests(list);
+    });
+    return () => unsub();
+  }, []);
 
   // Handler: Login
   const handleLogin = async () => {
@@ -846,17 +846,20 @@ export default function App() {
     const amt = parseFloat(depositAmount);
     const trx = depositTrxId.trim().toUpperCase();
 
+    const isCrypto = selectedMethod === 'binance' || selectedMethod === 'usdt_bep20';
+    const minAmt = isCrypto ? 12 : 50;
+
     let err = false;
-    if (isNaN(amt) || amt < 50) {
-      setDepAmtErr('Minimum amount is ৳ 50');
+    if (isNaN(amt) || amt < minAmt) {
+      setDepAmtErr(isCrypto ? 'Minimum amount is ৳ 12 (0.10$)' : 'Minimum amount is ৳ 50');
       err = true;
     }
-    if (amt > 50000) {
-      setDepAmtErr('Maximum amount is ৳ 50,000');
+    if (amt > 100000) {
+      setDepAmtErr('Maximum amount is ৳ 100,000');
       err = true;
     }
-    if (!trx || trx.length < 4) {
-      setDepTrxErr('Please enter a valid Transaction ID');
+    if (!trx || trx.length < 3) {
+      setDepTrxErr('Please enter a valid Transaction ID / Hash / Pay ID');
       err = true;
     }
     if (err) {
@@ -898,11 +901,163 @@ export default function App() {
     showToast('Number copied to clipboard!', 'success');
   };
 
+  // Admin: Save or Update Service Manually
+  const handleSaveServiceManual = async () => {
+    if (!adminCategory.trim() || !adminName.trim() || !adminPrice) {
+      showToast('Category, Name, and Price are required!', 'error');
+      haptic('error');
+      return;
+    }
+
+    const priceNum = parseFloat(adminPrice);
+    const minNum = parseInt(adminMin) || 10;
+    const maxNum = parseInt(adminMax) || 1000000;
+
+    if (isNaN(priceNum) || priceNum <= 0) {
+      showToast('Enter a valid price', 'error');
+      haptic('error');
+      return;
+    }
+
+    setAdminSubmitting(true);
+    haptic('heavy');
+
+    try {
+      const svcData = {
+        category: adminCategory.trim(),
+        name: adminName.trim(),
+        price: priceNum,
+        min: minNum,
+        max: maxNum,
+        desc: adminDesc.trim(),
+        apiServiceId: adminApiServiceId.trim()
+      };
+
+      if (editingServiceId) {
+        await updateDoc(doc(db, 'services', editingServiceId), svcData);
+        showToast('✅ Service updated successfully!', 'success');
+      } else {
+        await addDoc(collection(db, 'services'), svcData);
+        showToast('✅ Service added to Firestore!', 'success');
+      }
+
+      // Reset form
+      setAdminCategory('');
+      setAdminName('');
+      setAdminPrice('');
+      setAdminMin('100');
+      setAdminMax('100000');
+      setAdminDesc('');
+      setAdminApiServiceId('');
+      setEditingServiceId(null);
+      haptic('success');
+    } catch (err: any) {
+      console.error('Error saving service:', err);
+      showToast('Failed to save service: ' + err.message, 'error');
+      haptic('error');
+    } finally {
+      setAdminSubmitting(false);
+    }
+  };
+
+  // Admin: Edit Click
+  const handleEditServiceClick = (svc: ServiceData) => {
+    setEditingServiceId(svc.id);
+    setAdminCategory(svc.category || '');
+    setAdminName(svc.name || '');
+    setAdminPrice(String(svc.price || ''));
+    setAdminMin(String(svc.min || '100'));
+    setAdminMax(String(svc.max || '100000'));
+    setAdminDesc(svc.desc || '');
+    setAdminApiServiceId(svc.apiServiceId || '');
+    haptic('light');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Admin: Delete Service
+  const handleDeleteService = (svcId: string, svcName: string) => {
+    setModalConfig({
+      show: true,
+      title: 'Delete Service',
+      bodyHtml: <p className="text-slate-300 text-xs">Are you sure you want to delete <strong>{svcName}</strong>?</p>,
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'services', svcId));
+          showToast('Service deleted!', 'info');
+          haptic('success');
+        } catch (e: any) {
+          showToast('Failed to delete service', 'error');
+        }
+      }
+    });
+  };
+
+  // Admin: Manual Import Defaults (One-Click manual trigger)
+  const handleManualImportDefaults = () => {
+    setModalConfig({
+      show: true,
+      title: 'Import Default Services',
+      bodyHtml: <p className="text-slate-300 text-xs">Are you sure you want to import default preset services into Firestore?</p>,
+      onConfirm: async () => {
+        haptic('heavy');
+        showToast('Importing services to database...', 'info');
+        let addedCount = 0;
+        try {
+          const existingNames = new Set(allServices.map((s) => s.name));
+          for (const svc of DEFAULT_SERVICES) {
+            if (!existingNames.has(svc.name)) {
+              await addDoc(collection(db, 'services'), svc);
+              addedCount++;
+            }
+          }
+          showToast(`✅ ${addedCount} services imported successfully!`, 'success');
+          haptic('success');
+        } catch (e: any) {
+          showToast('Import failed: ' + e.message, 'error');
+          haptic('error');
+        }
+      }
+    });
+  };
+
+  // Admin: Approve Deposit
+  const handleApproveDeposit = async (dep: DepositRequest) => {
+    try {
+      const uRef = doc(db, 'users', dep.uid);
+      const uSnap = await getDoc(uRef);
+      if (uSnap.exists()) {
+        const curBal = uSnap.data().balance || 0;
+        await updateDoc(uRef, { balance: curBal + dep.amount });
+      } else {
+        await setDoc(uRef, { balance: dep.amount, total_orders: 0, createdAt: serverTimestamp() });
+      }
+
+      await updateDoc(doc(db, 'deposit_requests', dep.id), { status: 'Approved' });
+      showToast(`✅ Approved ৳${dep.amount} deposit for ${dep.trxId}`, 'success');
+      haptic('success');
+    } catch (e: any) {
+      showToast('Approval error: ' + e.message, 'error');
+    }
+  };
+
+  // Admin: Reject Deposit
+  const handleRejectDeposit = async (depId: string) => {
+    try {
+      await updateDoc(doc(db, 'deposit_requests', depId), { status: 'Rejected' });
+      showToast('Deposit request rejected', 'info');
+      haptic('light');
+    } catch (e: any) {
+      showToast('Rejection error: ' + e.message, 'error');
+    }
+  };
+
   // Payment Methods Map
-  const paymentMethodsConfig = {
+  const paymentMethodsConfig: Record<string, { label: string; number: string; icon: string; note?: string; isCrypto?: boolean }> = {
     bkash: { label: 'bKash Merchant', number: '01781119650', icon: 'b' },
     nagad: { label: 'Nagad Merchant', number: '01781119650', icon: 'N' },
-    rocket: { label: 'Rocket Personal', number: '01781119650', icon: 'R' }
+    rocket: { label: 'Rocket Personal', number: '01781119650', icon: 'R' },
+    binance: { label: 'Binance Pay / UID', number: '584304364', icon: 'B', note: '0.10$ = 12 TK ($1 = 120 TK)', isCrypto: true },
+    usdt_bep20: { label: 'USDT (BEP20 Network)', number: '0x5764a28569ef6efdce93db22656b297ab487cdaa', icon: 'U', note: '0.10$ = 12 TK ($1 = 120 TK)', isCrypto: true }
   };
 
   return (
@@ -1173,14 +1328,14 @@ export default function App() {
               <div className="stat-card">
                 <div className="flex items-center gap-2 mb-1.5">
                   <div className="w-6 h-6 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                    <i className="fas fa-coins text-blue-400 text-[10px]"></i>
+                    <i className="fas fa-wallet text-blue-400 text-[10px]"></i>
                   </div>
                   <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
-                    Coins
+                    Balance (৳)
                   </p>
                 </div>
                 <h2 className="text-xl font-black text-white tracking-tight">
-                  {userBalance.toFixed(2)}
+                  ৳ {userBalance.toFixed(2)}
                 </h2>
               </div>
               <div className="stat-card">
@@ -1285,7 +1440,7 @@ export default function App() {
                           .filter((s) => s.category === selectedCategory)
                           .map((s) => (
                             <option key={s.id} value={s.id}>
-                              {s.name} — {s.price}/1k Coins
+                              {s.name} — ৳ {s.price}/1k
                             </option>
                           ))}
                       </select>
@@ -1377,17 +1532,17 @@ export default function App() {
 
                     <div>
                       <label className="form-label">
-                        <i className="fas fa-coins mr-1 text-[8px]"></i> 5. Cost (Coins)
+                        <i className="fas fa-coins mr-1 text-[8px]"></i> 5. Cost (BDT / ৳)
                       </label>
                       <div className="price-preview-box">
                         <span className="text-lg font-black text-blue-400">
-                          {calculatedCost.toFixed(2)} Coins
+                          ৳ {calculatedCost.toFixed(2)}
                         </span>
                       </div>
                       <p className="text-[8px] text-center mt-1">
                         {calculatedCost > userBalance ? (
                           <span className="text-red-400 font-bold">
-                            Short {(calculatedCost - userBalance).toFixed(2)} Coins
+                            Short ৳ {(calculatedCost - userBalance).toFixed(2)}
                           </span>
                         ) : (
                           <span className="text-blue-400/60 font-semibold">Balance OK</span>
@@ -1495,7 +1650,7 @@ export default function App() {
                               Cost
                             </span>
                             <div className="font-bold text-xs text-blue-400">
-                              {o.cost?.toFixed(2)} Coins
+                              ৳ {o.cost?.toFixed(2)}
                             </div>
                           </div>
                           <div className="text-right">
@@ -1555,20 +1710,20 @@ export default function App() {
                 <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent pointer-events-none"></div>
                 <div className="relative z-10">
                   <div className="w-16 h-16 bg-blue-500/15 rounded-2xl flex items-center justify-center mx-auto text-blue-400 text-2xl mb-3">
-                    <i className="fas fa-coins"></i>
+                    <i className="fas fa-wallet"></i>
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">
                     Current Balance
                   </p>
                   <h2 className="text-3xl font-black text-white tracking-tight">
-                    {userBalance.toFixed(2)} Coins
+                    ৳ {userBalance.toFixed(2)}
                   </h2>
                 </div>
               </div>
 
               {/* Quick Amount Selector */}
               <div className="flex gap-2 mb-4">
-                {['100', '200', '500', '1000'].map((amt) => (
+                {['12', '50', '100', '500', '1000'].map((amt) => (
                   <button
                     key={amt}
                     onClick={() => {
@@ -1577,63 +1732,98 @@ export default function App() {
                     }}
                     className="deposit-method flex-1 text-center"
                   >
-                    {amt} Coins
+                    ৳ {amt}
                   </button>
                 ))}
               </div>
 
               {/* Method Selector */}
-              <div className="flex gap-2 mb-4">
-                {(['bkash', 'nagad', 'rocket'] as const).map((method) => (
-                  <div
-                    key={method}
-                    onClick={() => {
-                      setSelectedMethod(method);
-                      haptic('light');
-                    }}
-                    className={`deposit-method flex-1 text-center ${
-                      selectedMethod === method ? 'active-method' : ''
-                    }`}
-                  >
-                    <i className="fas fa-mobile-alt mr-1"></i>
-                    {method === 'bkash' ? 'bKash' : method === 'nagad' ? 'Nagad' : 'Rocket'}
-                  </div>
-                ))}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                {(['bkash', 'nagad', 'rocket', 'binance', 'usdt_bep20'] as const).map((method) => {
+                  const cfg = paymentMethodsConfig[method];
+                  const isActive = selectedMethod === method;
+                  return (
+                    <div
+                      key={method}
+                      onClick={() => {
+                        setSelectedMethod(method);
+                        haptic('light');
+                      }}
+                      className={`deposit-method flex flex-col items-center justify-center py-2.5 px-2 text-center cursor-pointer transition rounded-xl border ${
+                        isActive
+                          ? 'bg-blue-500/20 border-blue-500/50 text-white shadow-lg'
+                          : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
+                      }`}
+                    >
+                      <span className="text-[11px] font-extrabold uppercase">
+                        {method === 'bkash'
+                          ? 'bKash'
+                          : method === 'nagad'
+                          ? 'Nagad'
+                          : method === 'rocket'
+                          ? 'Rocket'
+                          : method === 'binance'
+                          ? 'Binance'
+                          : 'USDT (BEP20)'}
+                      </span>
+                      {cfg.isCrypto && (
+                        <span className="text-[8px] font-bold text-amber-400 mt-0.5">
+                          0.10$ = 12 TK
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Payment Box */}
-              <div className="glass-card p-4 flex items-center justify-between mb-4">
-                <div className="flex gap-3 items-center">
-                  <div className="w-10 h-10 bg-pink-500/15 rounded-xl flex items-center justify-center text-pink-400 text-lg font-black">
-                    {paymentMethodsConfig[selectedMethod].icon}
+              <div className="glass-card p-4 mb-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex gap-3 items-center min-w-0">
+                    <div className="w-10 h-10 bg-blue-500/15 rounded-xl flex items-center justify-center text-blue-400 text-lg font-black flex-shrink-0">
+                      {paymentMethodsConfig[selectedMethod].icon}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-bold text-slate-500 uppercase">
+                        {paymentMethodsConfig[selectedMethod].label}
+                      </p>
+                      <p className="font-bold text-xs tracking-wide text-white font-mono break-all">
+                        {paymentMethodsConfig[selectedMethod].number}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[9px] font-bold text-slate-500 uppercase">
-                      {paymentMethodsConfig[selectedMethod].label}
-                    </p>
-                    <p className="font-bold text-base tracking-wide text-white">
-                      {paymentMethodsConfig[selectedMethod].number}
-                    </p>
-                  </div>
+                  <button
+                    onClick={() => copyNumber(paymentMethodsConfig[selectedMethod].number)}
+                    className="copy-btn flex-shrink-0"
+                  >
+                    <i className="fas fa-copy mr-1"></i> COPY
+                  </button>
                 </div>
-                <button
-                  onClick={() => copyNumber(paymentMethodsConfig[selectedMethod].number)}
-                  className="copy-btn"
-                >
-                  <i className="fas fa-copy mr-1"></i> COPY
-                </button>
+
+                {paymentMethodsConfig[selectedMethod].note && (
+                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5 flex items-center gap-2">
+                    <i className="fas fa-coins text-amber-400 text-xs"></i>
+                    <p className="text-[11px] font-bold text-amber-300">
+                      Rate: <strong>0.10$ = 12 TK</strong> ($1 = 120 TK)
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Form */}
               <div className="glass-card p-5 space-y-4 mb-6">
                 <div>
                   <label className="form-label">
-                    <i className="fas fa-money-bill mr-1 text-[8px]"></i> Amount (BDT)
+                    <i className="fas fa-money-bill mr-1 text-[8px]"></i> Amount (BDT / ৳)
                   </label>
                   <input
                     type="number"
                     className="input-modern"
-                    placeholder="Enter amount (min ৳ 50)"
+                    placeholder={
+                      paymentMethodsConfig[selectedMethod].isCrypto
+                        ? 'Enter amount in BDT (e.g. 12 TK = $0.10)'
+                        : 'Enter amount (min ৳ 50)'
+                    }
                     value={depositAmount}
                     onChange={(e) => {
                       setDepositAmount(e.target.value);
@@ -1645,12 +1835,19 @@ export default function App() {
 
                 <div>
                   <label className="form-label">
-                    <i className="fas fa-receipt mr-1 text-[8px]"></i> Transaction ID
+                    <i className="fas fa-receipt mr-1 text-[8px]"></i>{' '}
+                    {paymentMethodsConfig[selectedMethod].isCrypto
+                      ? 'Transaction ID / Hash / Pay ID'
+                      : 'Transaction ID'}
                   </label>
                   <input
                     type="text"
                     className="input-modern uppercase"
-                    placeholder="e.g. BKASH8S7D6F"
+                    placeholder={
+                      paymentMethodsConfig[selectedMethod].isCrypto
+                        ? 'e.g. 584304364 or TxHash 0x...'
+                        : 'e.g. BKASH8S7D6F'
+                    }
                     value={depositTrxId}
                     onChange={(e) => {
                       setDepositTrxId(e.target.value);
@@ -1717,7 +1914,7 @@ export default function App() {
                           {dep.method} • {dep.trxId}
                         </span>
                         <span className="font-extrabold text-sm text-white">
-                          {dep.amount} Coins
+                          ৳ {dep.amount}
                         </span>
                       </div>
                     </div>
