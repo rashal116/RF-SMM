@@ -175,6 +175,81 @@ export default function App() {
   const [adminSearch, setAdminSearch] = useState('');
   const [adminSubmitting, setAdminSubmitting] = useState(false);
 
+  // Search Modal & Global Search State
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+
+  // Notification System State
+  const [showNotifModal, setShowNotifModal] = useState(false);
+  const [notifications, setNotifications] = useState<Array<{
+    id: string;
+    title: string;
+    message: string;
+    time: string;
+    unread: boolean;
+    type: 'order' | 'deposit' | 'system' | 'promo';
+  }>>([
+    {
+      id: '1',
+      title: 'Welcome to SMM Panel 🚀',
+      message: 'Instant automated delivery is enabled on all Facebook, TikTok & Telegram services!',
+      time: 'Just now',
+      unread: true,
+      type: 'system'
+    },
+    {
+      id: '2',
+      title: 'Crypto Payments Active 💳',
+      message: 'You can now add funds using Binance Pay (UID: 584304364) or USDT BEP20.',
+      time: '1 hour ago',
+      unread: true,
+      type: 'deposit'
+    },
+    {
+      id: '3',
+      title: 'Special Offer 🎉',
+      message: 'Get 10% extra bonus balance on deposits of ৳1,000 or more!',
+      time: 'Today',
+      unread: false,
+      type: 'promo'
+    }
+  ]);
+
+  // Mailbox System State
+  const [showMailboxModal, setShowMailboxModal] = useState(false);
+  const [mailboxTab, setMailboxTab] = useState<'inbox' | 'compose'>('inbox');
+  const [mailSubject, setMailSubject] = useState('');
+  const [mailMessage, setMailMessage] = useState('');
+  const [mailSubmitting, setMailSubmitting] = useState(false);
+  const [mailList, setMailList] = useState<Array<{
+    id: string;
+    sender: string;
+    subject: string;
+    message: string;
+    time: string;
+    unread: boolean;
+    isAdminReply?: boolean;
+  }>>([
+    {
+      id: 'm1',
+      sender: 'Admin Support',
+      subject: 'Welcome to SMM Panel Support',
+      message: 'Hello! Thank you for joining us. If you need custom packages or support, reply here or contact us via Telegram.',
+      time: 'Today 10:00 AM',
+      unread: true,
+      isAdminReply: true
+    },
+    {
+      id: 'm2',
+      sender: 'System Notice',
+      subject: 'Order Completion Speed Notice',
+      message: 'Facebook Followers & TikTok Views start within 1-5 minutes of placing your order.',
+      time: 'Yesterday',
+      unread: false,
+      isAdminReply: true
+    }
+  ]);
+
   // Modal Confirm State
   const [modalConfig, setModalConfig] = useState<{
     show: boolean;
@@ -628,6 +703,69 @@ export default function App() {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     }, 80);
+  };
+
+  // Search Select Service Handler
+  const handleSelectServiceFromSearch = (service: ServiceData) => {
+    haptic('heavy');
+    setSelectedCategory(service.category);
+    setSelectedServiceId(service.id);
+    setCurrentService(service);
+    setQuantity(service.min || 1000);
+    setSvcErr('');
+    setShowSearchModal(false);
+    showToast(`Selected: ${service.name}`, 'info');
+
+    setTimeout(() => {
+      const el = document.getElementById('order-form');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
+  };
+
+  // Notification Helpers
+  const unreadNotifCount = notifications.filter((n) => n.unread).length;
+  const markAllNotifsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
+    haptic('light');
+    showToast('All notifications marked as read', 'success');
+  };
+
+  // Mailbox Helpers
+  const unreadMailCount = mailList.filter((m) => m.unread).length;
+  const markMailRead = (id: string) => {
+    setMailList((prev) => prev.map((m) => (m.id === id ? { ...m, unread: false } : m)));
+  };
+
+  const handleSendMail = () => {
+    if (!mailSubject.trim()) {
+      showToast('Subject is required', 'error');
+      return;
+    }
+    if (!mailMessage.trim()) {
+      showToast('Message content is required', 'error');
+      return;
+    }
+    setMailSubmitting(true);
+    setTimeout(() => {
+      const newMail = {
+        id: 'm_' + Date.now(),
+        sender: currentUser?.name || 'You',
+        subject: mailSubject,
+        message: mailMessage,
+        time: 'Just now',
+        unread: false,
+        isAdminReply: false
+      };
+      setMailList((prev) => [newMail, ...prev]);
+      setMailSubject('');
+      setMailMessage('');
+      setMailSubmitting(false);
+      setMailboxTab('inbox');
+      haptic('success');
+      showToast('Mail sent to support! (মেইল পাঠানো হয়েছে)', 'success');
+    }, 400);
   };
 
   // Service Change
@@ -1421,18 +1559,60 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-1.5 items-center">
+                {/* Search Button */}
                 <button
-                  onClick={() => showToast('No new notifications', 'info')}
-                  className="w-10 h-10 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-white cursor-pointer active:scale-95 transition"
+                  onClick={() => {
+                    setShowSearchModal(true);
+                    haptic('light');
+                  }}
+                  className="relative w-9 h-9 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-white cursor-pointer active:scale-95 transition hover:bg-blue-500/20 hover:border-blue-400/40"
+                  title="Search Services (সার্চ)"
                 >
-                  <i className="fas fa-bell text-sm"></i>
+                  <i className="fas fa-search text-xs text-blue-400"></i>
                 </button>
+
+                {/* Notifications Button */}
+                <button
+                  onClick={() => {
+                    setShowNotifModal(true);
+                    haptic('light');
+                  }}
+                  className="relative w-9 h-9 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-white cursor-pointer active:scale-95 transition hover:bg-amber-500/20 hover:border-amber-400/40"
+                  title="Notifications (নটিফিকেশন)"
+                >
+                  <i className="fas fa-bell text-xs text-amber-400"></i>
+                  {unreadNotifCount > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center border border-[#030712] animate-bounce">
+                      {unreadNotifCount}
+                    </span>
+                  )}
+                </button>
+
+                {/* Mailbox Button */}
+                <button
+                  onClick={() => {
+                    setShowMailboxModal(true);
+                    haptic('light');
+                  }}
+                  className="relative w-9 h-9 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-white cursor-pointer active:scale-95 transition hover:bg-emerald-500/20 hover:border-emerald-400/40"
+                  title="Mail Box (মেইল বক্স)"
+                >
+                  <i className="fas fa-envelope text-xs text-emerald-400"></i>
+                  {unreadMailCount > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center border border-[#030712]">
+                      {unreadMailCount}
+                    </span>
+                  )}
+                </button>
+
+                {/* Logout Button */}
                 <button
                   onClick={handleLogout}
-                  className="w-10 h-10 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-white cursor-pointer active:scale-95 transition"
+                  className="w-9 h-9 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-slate-400 hover:text-red-400 cursor-pointer active:scale-95 transition"
+                  title="Logout"
                 >
-                  <i className="fas fa-sign-out-alt text-sm"></i>
+                  <i className="fas fa-sign-out-alt text-xs"></i>
                 </button>
               </div>
             </div>
@@ -1468,6 +1648,24 @@ export default function App() {
           {/* HOME TAB */}
           {activeTab === 'home' && (
             <section className="px-5 mt-5">
+              {/* SEARCH BAR TRIGGER */}
+              <div className="mb-4">
+                <div
+                  onClick={() => {
+                    setShowSearchModal(true);
+                    haptic('light');
+                  }}
+                  className="relative w-full bg-slate-900/90 border border-blue-500/30 hover:border-blue-400/60 rounded-2xl py-3 pl-10 pr-12 text-xs font-semibold text-slate-300 shadow-[0_4px_20px_rgba(0,0,0,0.3)] cursor-pointer transition-all flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2 text-slate-400">
+                    <i className="fas fa-search text-blue-400 text-sm"></i>
+                    <span className="text-slate-400 font-medium">সার্চ করুন (Search Facebook, TikTok, Followers)...</span>
+                  </div>
+                  <span className="bg-blue-500/20 text-blue-300 text-[9px] font-extrabold px-2.5 py-0.5 rounded-full border border-blue-500/30">
+                    FIND
+                  </span>
+                </div>
+              </div>
               {/* SOCIAL PLATFORMS SELECTOR GRID */}
               <div className="mb-6">
                 <div className="flex items-center justify-between mb-2.5 px-1">
@@ -2218,6 +2416,365 @@ export default function App() {
                 </div>
               </div>
             </section>
+          )}
+
+          {/* SEARCH MODAL */}
+          {showSearchModal && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end sm:justify-center p-0 sm:p-4 animate-fade-in">
+              <div className="bg-[#0b1329] border border-blue-500/30 rounded-t-3xl sm:rounded-3xl max-h-[90vh] flex flex-col overflow-hidden shadow-[0_0_50px_rgba(59,130,246,0.3)] w-full max-w-lg mx-auto">
+                {/* Modal Header */}
+                <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/80">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400">
+                      <i className="fas fa-search text-xs"></i>
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-sm text-white">Search Services (সার্চ করুন)</h3>
+                      <p className="text-[9px] text-slate-400">Find any SMM service by name, platform or ID</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowSearchModal(false)}
+                    className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white"
+                  >
+                    <i className="fas fa-times text-xs"></i>
+                  </button>
+                </div>
+
+                {/* Search Input Bar */}
+                <div className="p-4 border-b border-white/10 bg-slate-900/40">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      autoFocus
+                      className="input-modern pl-10 pr-10 text-xs"
+                      placeholder="Type platform or service (e.g., Facebook, Followers, Likes, TikTok)..."
+                      value={globalSearchQuery}
+                      onChange={(e) => setGlobalSearchQuery(e.target.value)}
+                    />
+                    <i className="fas fa-search absolute left-3.5 top-3.5 text-blue-400 text-xs"></i>
+                    {globalSearchQuery && (
+                      <button
+                        onClick={() => setGlobalSearchQuery('')}
+                        className="absolute right-3 top-2.5 text-slate-400 hover:text-white text-xs p-1"
+                      >
+                        <i className="fas fa-times-circle"></i>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Search Results List */}
+                <div className="p-4 overflow-y-auto max-h-[55vh] space-y-2.5">
+                  {(() => {
+                    const q = globalSearchQuery.trim().toLowerCase();
+                    const filtered = allServices.filter((s) => {
+                      if (!q) return true;
+                      return (
+                        s.name.toLowerCase().includes(q) ||
+                        s.category.toLowerCase().includes(q) ||
+                        s.id.toLowerCase().includes(q) ||
+                        (s.description && s.description.toLowerCase().includes(q))
+                      );
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="text-center py-10">
+                          <i className="fas fa-search-minus text-3xl text-slate-600 mb-2"></i>
+                          <p className="text-xs text-slate-400 font-bold">No services found for "{globalSearchQuery}"</p>
+                          <p className="text-[10px] text-slate-500 mt-1">Try searching for "Facebook", "Likes", or "Followers"</p>
+                        </div>
+                      );
+                    }
+
+                    return filtered.map((svc) => {
+                      const meta = getPlatformMeta(svc.category);
+                      return (
+                        <div
+                          key={svc.id}
+                          className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 hover:border-blue-500/40 transition-all flex flex-col gap-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="w-6 h-6 rounded-lg flex items-center justify-center text-xs"
+                                style={{ color: meta.color, backgroundColor: `${meta.color}20` }}
+                              >
+                                <i className={meta.icon}></i>
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                {svc.category}
+                              </span>
+                            </div>
+                            <span className="text-[9px] font-mono font-bold text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
+                              ID: {svc.id}
+                            </span>
+                          </div>
+
+                          <h4 className="font-extrabold text-xs text-white leading-snug">{svc.name}</h4>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-white/5">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-black text-emerald-400">
+                                ৳ {svc.price} <span className="text-[9px] text-slate-400 font-normal">/1k</span>
+                              </span>
+                              <span className="text-[9px] text-slate-400">
+                                Min: {svc.min} | Max: {svc.max?.toLocaleString()}
+                              </span>
+                            </div>
+
+                            <button
+                              onClick={() => handleSelectServiceFromSearch(svc)}
+                              className="px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-[10px] rounded-xl shadow-md active:scale-95 transition flex items-center gap-1"
+                            >
+                              <span>SELECT</span>
+                              <i className="fas fa-arrow-right text-[8px]"></i>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* NOTIFICATIONS MODAL */}
+          {showNotifModal && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end sm:justify-center p-0 sm:p-4 animate-fade-in">
+              <div className="bg-[#0b1329] border border-amber-500/30 rounded-t-3xl sm:rounded-3xl max-h-[85vh] flex flex-col overflow-hidden shadow-[0_0_50px_rgba(245,158,11,0.25)] w-full max-w-lg mx-auto">
+                {/* Modal Header */}
+                <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/80">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400">
+                      <i className="fas fa-bell text-xs"></i>
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
+                        <span>Notifications</span>
+                        {unreadNotifCount > 0 && (
+                          <span className="bg-red-500 text-white text-[9px] font-black px-2 py-0.2 rounded-full">
+                            {unreadNotifCount} new
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-[9px] text-slate-400">Updates, deposit statuses & announcements</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {unreadNotifCount > 0 && (
+                      <button
+                        onClick={markAllNotifsRead}
+                        className="text-[9px] font-bold text-amber-400 hover:underline bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20"
+                      >
+                        Read All
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowNotifModal(false)}
+                      className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white"
+                    >
+                      <i className="fas fa-times text-xs"></i>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Notifications List */}
+                <div className="p-4 overflow-y-auto max-h-[60vh] space-y-2.5">
+                  {notifications.length === 0 ? (
+                    <div className="text-center py-10">
+                      <i className="fas fa-bell-slash text-3xl text-slate-600 mb-2"></i>
+                      <p className="text-xs text-slate-400 font-bold">No notifications yet</p>
+                    </div>
+                  ) : (
+                    notifications.map((notif) => {
+                      let iconClass = 'fas fa-info-circle text-blue-400 bg-blue-500/20';
+                      if (notif.type === 'deposit') iconClass = 'fas fa-wallet text-emerald-400 bg-emerald-500/20';
+                      if (notif.type === 'order') iconClass = 'fas fa-rocket text-indigo-400 bg-indigo-500/20';
+                      if (notif.type === 'promo') iconClass = 'fas fa-gift text-pink-400 bg-pink-500/20';
+
+                      return (
+                        <div
+                          key={notif.id}
+                          onClick={() => {
+                            setNotifications((prev) =>
+                              prev.map((n) => (n.id === notif.id ? { ...n, unread: false } : n))
+                            );
+                          }}
+                          className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+                            notif.unread
+                              ? 'bg-slate-900/90 border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)]'
+                              : 'bg-slate-900/40 border-white/5 opacity-80'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs flex-shrink-0 ${iconClass}`}>
+                              <i className={iconClass.split(' ')[0] + ' ' + iconClass.split(' ')[1]}></i>
+                            </div>
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between mb-1">
+                                <h4 className="font-extrabold text-xs text-white flex items-center gap-1.5">
+                                  {notif.title}
+                                  {notif.unread && (
+                                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                                  )}
+                                </h4>
+                                <span className="text-[9px] text-slate-500 font-mono">{notif.time}</span>
+                              </div>
+                              <p className="text-[11px] text-slate-300 leading-relaxed">{notif.message}</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MAILBOX MODAL */}
+          {showMailboxModal && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end sm:justify-center p-0 sm:p-4 animate-fade-in">
+              <div className="bg-[#0b1329] border border-emerald-500/30 rounded-t-3xl sm:rounded-3xl max-h-[88vh] flex flex-col overflow-hidden shadow-[0_0_50px_rgba(16,185,129,0.25)] w-full max-w-lg mx-auto">
+                {/* Modal Header */}
+                <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/80">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400">
+                      <i className="fas fa-envelope text-xs"></i>
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
+                        <span>Mail Box (মেইল বক্স)</span>
+                        {unreadMailCount > 0 && (
+                          <span className="bg-blue-500 text-white text-[9px] font-black px-2 py-0.2 rounded-full">
+                            {unreadMailCount}
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-[9px] text-slate-400">Support tickets & admin announcements</p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowMailboxModal(false)}
+                    className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white"
+                  >
+                    <i className="fas fa-times text-xs"></i>
+                  </button>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex border-b border-white/10 bg-slate-900/50">
+                  <button
+                    onClick={() => setMailboxTab('inbox')}
+                    className={`flex-1 py-2.5 text-xs font-extrabold flex items-center justify-center gap-2 transition-all ${
+                      mailboxTab === 'inbox'
+                        ? 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/10'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <i className="fas fa-inbox"></i>
+                    <span>Inbox ({mailList.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setMailboxTab('compose')}
+                    className={`flex-1 py-2.5 text-xs font-extrabold flex items-center justify-center gap-2 transition-all ${
+                      mailboxTab === 'compose'
+                        ? 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/10'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <i className="fas fa-paper-plane"></i>
+                    <span>Send Mail (মেসেজ পাঠান)</span>
+                  </button>
+                </div>
+
+                {/* Tab Content */}
+                <div className="p-4 overflow-y-auto max-h-[60vh]">
+                  {mailboxTab === 'inbox' ? (
+                    <div className="space-y-2.5">
+                      {mailList.length === 0 ? (
+                        <div className="text-center py-10">
+                          <i className="fas fa-mail-bulk text-3xl text-slate-600 mb-2"></i>
+                          <p className="text-xs text-slate-400 font-bold">Your mailbox is empty</p>
+                        </div>
+                      ) : (
+                        mailList.map((mail) => (
+                          <div
+                            key={mail.id}
+                            onClick={() => markMailRead(mail.id)}
+                            className={`p-3.5 rounded-2xl border transition-all ${
+                              mail.unread
+                                ? 'bg-slate-900/90 border-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.15)]'
+                                : 'bg-slate-900/40 border-white/5'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-bold">
+                                  <i className="fas fa-user-shield"></i>
+                                </span>
+                                <span className="text-xs font-extrabold text-white">{mail.sender}</span>
+                              </div>
+                              <span className="text-[9px] text-slate-500 font-mono">{mail.time}</span>
+                            </div>
+
+                            <h4 className="font-extrabold text-xs text-emerald-300 mb-1">{mail.subject}</h4>
+                            <p className="text-[11px] text-slate-300 leading-relaxed bg-black/20 p-2.5 rounded-xl border border-white/5">
+                              {mail.message}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    /* Compose Form */
+                    <div className="space-y-3.5">
+                      <div>
+                        <label className="form-label">Subject (বিষয়)</label>
+                        <input
+                          type="text"
+                          className="input-modern text-xs"
+                          placeholder="e.g. Need assistance with Order #1024 or Deposit"
+                          value={mailSubject}
+                          onChange={(e) => setMailSubject(e.target.value)}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="form-label">Message Details (মেসেজ)</label>
+                        <textarea
+                          rows={4}
+                          className="input-modern text-xs resize-none"
+                          placeholder="Write your message or inquiry here..."
+                          value={mailMessage}
+                          onChange={(e) => setMailMessage(e.target.value)}
+                        />
+                      </div>
+
+                      <button
+                        onClick={handleSendMail}
+                        disabled={mailSubmitting}
+                        className="btn-primary-solid flex items-center justify-center gap-2 w-full py-3"
+                      >
+                        {mailSubmitting ? (
+                          <span className="loading-spinner"></span>
+                        ) : (
+                          <>
+                            <i className="fas fa-paper-plane text-xs"></i>
+                            <span>SEND MAIL TO SUPPORT (মেইল পাঠান)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
 
           {/* BOTTOM NAVIGATION */}
