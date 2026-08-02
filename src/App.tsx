@@ -2370,7 +2370,22 @@ export default function App() {
                   )}
                 </button>
 
-
+                {/* Admin Mode Toggle Button */}
+                <button
+                  onClick={() => {
+                    setActiveTab(activeTab === 'admin' ? 'home' : 'admin');
+                    haptic('heavy');
+                  }}
+                  className={`relative px-3 py-1.5 rounded-xl border flex items-center gap-1.5 font-extrabold text-[10px] cursor-pointer transition active:scale-95 ${
+                    activeTab === 'admin'
+                      ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.5)]'
+                      : 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
+                  }`}
+                  title="Admin Panel (এডমিন প্যানেল)"
+                >
+                  <i className="fas fa-crown text-amber-400"></i>
+                  <span>ADMIN</span>
+                </button>
               </div>
             </div>
 
@@ -5563,6 +5578,16 @@ export default function App() {
                 <i className="fas fa-user-circle"></i>
               )}
               <span>Profile</span>
+            </div>
+            <div
+              className={`nav-item-premium ${activeTab === 'admin' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('admin');
+                haptic('heavy');
+              }}
+            >
+              <i className="fas fa-crown text-amber-400"></i>
+              <span>Admin</span>
             </div>
 
           </nav>
