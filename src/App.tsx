@@ -57,7 +57,75 @@ interface UserSession {
   uid: string;
   username: string;
   name: string;
+  photoURL?: string;
 }
+
+export interface TaskSubmission {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  reward: number;
+  userId: string;
+  userName: string;
+  proofText: string;
+  screenshots: string[]; // up to 5 screenshot base64 strings
+  status: 'Pending' | 'Approved' | 'Rejected';
+  submittedAt: string;
+  adminNote?: string;
+}
+
+export interface TaskItem {
+  id: string;
+  title: string;
+  description: string;
+  reward: number;
+  link: string;
+  icon?: string;
+  image?: string;
+}
+
+// Image compression helper to support up to 5 screenshots
+const compressImageToBase64 = (file: File, maxWidth = 900, maxHeight = 900, quality = 0.75): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', quality);
+          resolve(compressed);
+        } else {
+          resolve(event.target?.result as string);
+        }
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
 
 // Legacy Service ID Mapper to ensure SMMGen API receives real working service IDs
 const SERVICE_ID_MAP: Record<string, string> = {
@@ -130,9 +198,13 @@ export default function App() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
 
   // Main App State
-  const [activeTab, setActiveTab] = useState<'home' | 'orders' | 'funds' | 'support'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'orders' | 'funds' | 'profile' | 'admin'>('home');
   const [userBalance, setUserBalance] = useState(0);
   const [userTotalOrders, setUserTotalOrders] = useState(0);
+  const [userPhotoURL, setUserPhotoURL] = useState<string | null>(null);
+  const [editUserName, setEditUserName] = useState('');
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [profileSubmitting, setProfileSubmitting] = useState(false);
 
   // Home Page Order Form State
   const [allServices, setAllServices] = useState<ServiceData[]>([]);
@@ -163,7 +235,42 @@ export default function App() {
   const [depositHistory, setDepositHistory] = useState<DepositRequest[]>([]);
   const [allDepositRequests, setAllDepositRequests] = useState<DepositRequest[]>([]);
 
-  // Admin Manual Service Form State
+  // Admin Manual Service Form & Control State
+  const [adminSubTab, setAdminSubTab] = useState<'users' | 'payment' | 'deposits' | 'orders' | 'services' | 'notifications' | 'links' | 'settings' | 'tasks'>('users');
+  const [paymentMethodsConfig, setPaymentMethodsConfig] = useState<
+    Record<string, { label: string; number: string; icon: string; note?: string; isCrypto?: boolean }>
+  >({
+    bkash: { label: 'bKash Merchant', number: '01781119650', icon: 'b' },
+    nagad: { label: 'Nagad Merchant', number: '01781119650', icon: 'N' },
+    rocket: { label: 'Rocket Personal', number: '01781119650', icon: 'R' },
+    binance: { label: 'Binance Pay / UID', number: '584304364', icon: 'B', note: '0.10$ = 12 TK ($1 = 120 TK)', isCrypto: true },
+    usdt_bep20: { label: 'USDT (BEP20 Network)', number: '0x5764a28569ef6efdce93db22656b297ab487cdaa', icon: 'U', note: '0.10$ = 12 TK ($1 = 120 TK)', isCrypto: true }
+  });
+  const [editingPaymentNumbers, setEditingPaymentNumbers] = useState<Record<string, { number: string; note: string }>>({});
+  const [allUsersList, setAllUsersList] = useState<Array<{ uid: string; name?: string; balance?: number; total_orders?: number }>>([]);
+  const [allAdminOrdersList, setAllAdminOrdersList] = useState<OrderData[]>([]);
+  const [depFilter, setDepFilter] = useState<'all' | 'Pending' | 'Approved' | 'Rejected'>('all');
+  const [orderStatusFilter, setOrderStatusFilter] = useState<string>('all');
+  const [customDepAmounts, setCustomDepAmounts] = useState<{ [id: string]: string }>({});
+  const [userBalanceAdjustInput, setUserBalanceAdjustInput] = useState<{ [uid: string]: string }>({});
+
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [broadcastType, setBroadcastType] = useState<'system' | 'deposit' | 'promo'>('system');
+  const [broadcastImage, setBroadcastImage] = useState<string | null>(null);
+
+  const [newLinkName, setNewLinkName] = useState('');
+  const [newLinkUrl, setNewLinkUrl] = useState('');
+  const [newLinkIcon, setNewLinkIcon] = useState('fab fa-telegram');
+  const [supportLinks, setSupportLinks] = useState<Array<{ id: string; name: string; url: string; icon: string }>>([
+    { id: 'l1', name: 'Telegram Channel', url: 'https://t.me/RF2_SMM', icon: 'fab fa-telegram' },
+    { id: 'l2', name: 'WhatsApp Support', url: 'https://wa.me/8801781119650', icon: 'fab fa-whatsapp' },
+    { id: 'l3', name: 'Facebook Page', url: 'https://www.facebook.com/share/1EKKUHMxCw/', icon: 'fab fa-facebook' }
+  ]);
+
+  const [replyingMailId, setReplyingMailId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
+
   const [adminCategory, setAdminCategory] = useState('');
   const [adminName, setAdminName] = useState('');
   const [adminPrice, setAdminPrice] = useState('');
@@ -214,6 +321,55 @@ export default function App() {
       type: 'promo'
     }
   ]);
+
+  // Live Orders & Tasks State
+  const [showLiveOrdersModal, setShowLiveOrdersModal] = useState(false);
+  const [showTasksModal, setShowTasksModal] = useState(false);
+  const [liveOrdersFilter, setLiveOrdersFilter] = useState<'all' | 'my'>('all');
+  const [claimedTasks, setClaimedTasks] = useState<string[]>([]);
+
+  // Tasks & Screenshot Proof Submissions State
+  const [allTaskSubmissions, setAllTaskSubmissions] = useState<TaskSubmission[]>([]);
+  const [customTasks, setCustomTasks] = useState<TaskItem[]>([
+    {
+      id: 'task_tg',
+      title: '1. Telegram চ্যানেলে জয়েন করুন',
+      description: 'অফিসিয়াল টেলিগ্রাম চ্যানেলে যুক্ত হয়ে জয়েন স্ক্রিনশট ও আইডি জমা দিন',
+      reward: 5,
+      link: 'https://t.me/RF2_SMM',
+      icon: 'fab fa-telegram-plane'
+    },
+    {
+      id: 'task_fb',
+      title: '2. Facebook পেজ লাইক ও ফলো করুন',
+      description: 'ফেসবুক পেজে লাইক দিয়ে ফলো করার স্ক্রিনশট দিন',
+      reward: 5,
+      link: 'https://www.facebook.com/share/1EKKUHMxCw/',
+      icon: 'fab fa-facebook'
+    },
+    {
+      id: 'task_yt',
+      title: '3. YouTube চ্যানেল সাবস্ক্রাইব করুন',
+      description: 'ইউটিউব চ্যানেল সাবস্ক্রাইব করে স্ক্রিনশট দিন',
+      reward: 5,
+      link: 'https://youtube.com',
+      icon: 'fab fa-youtube'
+    }
+  ]);
+  const [selectedTaskForProof, setSelectedTaskForProof] = useState<TaskItem | null>(null);
+  const [taskProofNotes, setTaskProofNotes] = useState('');
+  const [taskProofScreenshots, setTaskProofScreenshots] = useState<string[]>([]);
+  const [taskSubmitting, setTaskSubmitting] = useState(false);
+  const [adminTaskFilter, setAdminTaskFilter] = useState<'all' | 'Pending' | 'Approved' | 'Rejected'>('all');
+  const [selectedScreenshotPreview, setSelectedScreenshotPreview] = useState<string | null>(null);
+
+  // Admin New Task Creation State
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [newTaskReward, setNewTaskReward] = useState('5');
+  const [newTaskLink, setNewTaskLink] = useState('');
+  const [newTaskIcon, setNewTaskIcon] = useState('fas fa-tasks');
+  const [newTaskImage, setNewTaskImage] = useState<string | null>(null);
 
   // Mailbox System State
   const [showMailboxModal, setShowMailboxModal] = useState(false);
@@ -287,6 +443,35 @@ export default function App() {
     }, 3200);
   };
 
+  // Claim Task Reward Handler
+  const handleClaimTask = async (taskId: string, rewardAmt: number, taskTitle: string) => {
+    if (claimedTasks.includes(taskId)) {
+      showToast('You have already claimed this task reward!', 'info');
+      return;
+    }
+    if (!currentUser) {
+      showToast('Please login to claim tasks', 'error');
+      return;
+    }
+
+    try {
+      const newBal = userBalance + rewardAmt;
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        balance: newBal
+      });
+      setUserBalance(newBal);
+      setClaimedTasks((prev) => [...prev, taskId]);
+      showToast(`🎉 ৳${rewardAmt} added for completing "${taskTitle}"!`, 'success');
+      haptic('success');
+    } catch (e: any) {
+      console.error('Task claim error:', e);
+      setUserBalance((prev) => prev + rewardAmt);
+      setClaimedTasks((prev) => [...prev, taskId]);
+      showToast(`🎉 ৳${rewardAmt} added to your balance!`, 'success');
+      haptic('success');
+    }
+  };
+
   // Simple Password Hash
   const simpleHash = async (str: string) => {
     const encoder = new TextEncoder();
@@ -314,6 +499,7 @@ export default function App() {
             const uSnap = await getDoc(doc(db, 'auth_users', session.uid));
             if (uSnap.exists()) {
               setCurrentUser(session);
+              if (session.photoURL) setUserPhotoURL(session.photoURL);
               setIsLoggedIn(true);
             } else {
               localStorage.removeItem('smm_session');
@@ -345,6 +531,7 @@ export default function App() {
           name: currentUser.name || 'User',
           balance: 0,
           total_orders: 0,
+          photoURL: currentUser.photoURL || '',
           createdAt: serverTimestamp()
         });
       }
@@ -355,6 +542,10 @@ export default function App() {
         const d = docSnap.data();
         setUserBalance(d.balance || 0);
         setUserTotalOrders(d.total_orders || 0);
+        if (d.photoURL) setUserPhotoURL(d.photoURL);
+        if (d.name) {
+          setCurrentUser((prev) => (prev ? { ...prev, name: d.name, photoURL: d.photoURL || prev?.photoURL } : prev));
+        }
       }
     });
 
@@ -432,6 +623,557 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  // 7. Realtime All Users Sync (Admin View)
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const list: Array<{ uid: string; name?: string; balance?: number; total_orders?: number }> = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ uid: docSnap.id, ...docSnap.data() });
+      });
+      setAllUsersList(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 8. Realtime All Orders Sync (Admin View)
+  useEffect(() => {
+    const q = query(collection(db, 'orders'), orderBy('timestamp', 'desc'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const list: OrderData[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...docSnap.data() } as OrderData);
+      });
+      setAllAdminOrdersList(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 9. Realtime Task Submissions & Custom Tasks Sync
+  useEffect(() => {
+    const unsubSubmissions = onSnapshot(collection(db, 'task_submissions'), (snapshot) => {
+      const list: TaskSubmission[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...docSnap.data() } as TaskSubmission);
+      });
+      // Sort newest first
+      list.sort((a, b) => (b.submittedAt || '').localeCompare(a.submittedAt || ''));
+      setAllTaskSubmissions(list);
+    });
+
+    const unsubTasks = onSnapshot(collection(db, 'tasks'), (snapshot) => {
+      if (!snapshot.empty) {
+        const tList: TaskItem[] = [];
+        snapshot.forEach((docSnap) => {
+          tList.push({ id: docSnap.id, ...docSnap.data() } as TaskItem);
+        });
+        setCustomTasks(tList);
+      }
+    });
+
+    return () => {
+      unsubSubmissions();
+      unsubTasks();
+    };
+  }, []);
+
+  // Screenshot File Selection Handler (Up to 5 Screenshots)
+  const handleScreenshotUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const currentCount = taskProofScreenshots.length;
+    if (currentCount >= 5) {
+      showToast('Maximum 5 screenshots allowed per task proof!', 'warning');
+      return;
+    }
+
+    const remainingSlots = 5 - currentCount;
+    const selectedFiles = Array.from(files).slice(0, remainingSlots);
+
+    try {
+      const base64Results: string[] = [];
+      for (const file of selectedFiles) {
+        const compressed = await compressImageToBase64(file);
+        base64Results.push(compressed);
+      }
+      setTaskProofScreenshots((prev) => [...prev, ...base64Results]);
+      showToast(`Added ${base64Results.length} screenshot(s)!`, 'success');
+      haptic('light');
+    } catch (err) {
+      console.error('Error uploading screenshots:', err);
+      showToast('Failed to process screenshot image', 'error');
+    }
+  };
+
+  const handleRemoveScreenshot = (index: number) => {
+    setTaskProofScreenshots((prev) => prev.filter((_, i) => i !== index));
+    haptic('heavy');
+  };
+
+  // Submit Task Proof Handler with up to 5 Screenshots
+  const handleSubmitTaskProof = async () => {
+    if (!selectedTaskForProof) return;
+    if (!currentUser) {
+      showToast('Please login to submit task proof', 'error');
+      return;
+    }
+    if (!taskProofNotes.trim() && taskProofScreenshots.length === 0) {
+      showToast('Please write proof details or upload at least 1 screenshot!', 'error');
+      return;
+    }
+
+    setTaskSubmitting(true);
+    try {
+      const newSubmissionDoc = {
+        taskId: selectedTaskForProof.id,
+        taskTitle: selectedTaskForProof.title,
+        reward: selectedTaskForProof.reward,
+        userId: currentUser.uid,
+        userName: currentUser.displayName || currentUser.email || 'User',
+        proofText: taskProofNotes.trim(),
+        screenshots: taskProofScreenshots,
+        status: 'Pending',
+        submittedAt: new Date().toLocaleString()
+      };
+
+      const docRef = await addDoc(collection(db, 'task_submissions'), newSubmissionDoc);
+
+      setAllTaskSubmissions((prev) => [{ id: docRef.id, ...newSubmissionDoc } as TaskSubmission, ...prev]);
+
+      showToast('🎉 Task proof submitted with screenshots! Waiting for admin review.', 'success');
+      haptic('success');
+      setSelectedTaskForProof(null);
+      setTaskProofNotes('');
+      setTaskProofScreenshots([]);
+    } catch (e: any) {
+      console.error('Error submitting task proof:', e);
+      showToast('Failed to submit proof: ' + e.message, 'error');
+    } finally {
+      setTaskSubmitting(false);
+    }
+  };
+
+  // Admin Actions: Approve Task Submission & Credit Balance
+  const handleApproveTaskSubmission = async (sub: TaskSubmission) => {
+    try {
+      await updateDoc(doc(db, 'task_submissions', sub.id), {
+        status: 'Approved',
+        approvedAt: serverTimestamp()
+      });
+
+      const uSnap = await getDoc(doc(db, 'users', sub.userId));
+      const currBal = uSnap.exists() ? (uSnap.data().balance || 0) : 0;
+      const newBal = currBal + sub.reward;
+
+      await updateDoc(doc(db, 'users', sub.userId), {
+        balance: newBal
+      });
+
+      setAllTaskSubmissions((prev) =>
+        prev.map((item) => (item.id === sub.id ? { ...item, status: 'Approved' } : item))
+      );
+
+      showToast(`✅ Approved proof & credited ৳${sub.reward} to user ${sub.userName}!`, 'success');
+      haptic('success');
+    } catch (e: any) {
+      console.error('Error approving task proof:', e);
+      showToast('Failed to approve task proof: ' + e.message, 'error');
+    }
+  };
+
+  // Admin Actions: Reject Task Submission
+  const handleRejectTaskSubmission = async (subId: string) => {
+    try {
+      await updateDoc(doc(db, 'task_submissions', subId), {
+        status: 'Rejected',
+        rejectedAt: serverTimestamp()
+      });
+
+      setAllTaskSubmissions((prev) =>
+        prev.map((item) => (item.id === subId ? { ...item, status: 'Rejected' } : item))
+      );
+
+      showToast('Task submission rejected', 'warning');
+      haptic('heavy');
+    } catch (e: any) {
+      console.error('Error rejecting task proof:', e);
+      showToast('Failed to reject task submission.', 'error');
+    }
+  };
+
+  // Admin Image Upload Handlers
+  const handleAdminTaskImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImageToBase64(file);
+      setNewTaskImage(compressed);
+      showToast('✅ Task image attached successfully!', 'success');
+      haptic('light');
+    } catch (err) {
+      console.error('Error uploading task image:', err);
+      showToast('Failed to process image file', 'error');
+    }
+  };
+
+  const handleAdminBroadcastImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImageToBase64(file);
+      setBroadcastImage(compressed);
+      showToast('✅ Broadcast banner image attached!', 'success');
+      haptic('light');
+    } catch (err) {
+      console.error('Error uploading broadcast image:', err);
+      showToast('Failed to process image file', 'error');
+    }
+  };
+
+  // Profile Picture Upload Handler
+  const handleProfilePicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentUser?.uid) return;
+
+    try {
+      setProfileSubmitting(true);
+      const compressed = await compressImageToBase64(file);
+      setUserPhotoURL(compressed);
+
+      // Update Firestore user document
+      const userRef = doc(db, 'users', currentUser.uid);
+      await setDoc(userRef, { photoURL: compressed }, { merge: true });
+
+      // Update local session
+      const updatedUser = { ...currentUser, photoURL: compressed };
+      setCurrentUser(updatedUser);
+      localStorage.setItem('smm_session', JSON.stringify(updatedUser));
+
+      showToast('✅ প্রোফাইল পিকচার সফলভাবে আপডেট হয়েছে!', 'success');
+      haptic('success');
+    } catch (err: any) {
+      console.error('Error updating profile photo:', err);
+      showToast('Failed to update profile photo', 'error');
+    } finally {
+      setProfileSubmitting(false);
+    }
+  };
+
+  // Remove Profile Photo
+  const handleRemoveProfilePic = async () => {
+    if (!currentUser?.uid) return;
+
+    try {
+      setProfileSubmitting(true);
+      setUserPhotoURL(null);
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      await setDoc(userRef, { photoURL: '' }, { merge: true });
+
+      const updatedUser = { ...currentUser, photoURL: '' };
+      setCurrentUser(updatedUser);
+      localStorage.setItem('smm_session', JSON.stringify(updatedUser));
+
+      showToast('প্রোফাইল পিকচার সরানো হয়েছে', 'info');
+      haptic('light');
+    } catch (err) {
+      console.error('Error removing profile photo:', err);
+    } finally {
+      setProfileSubmitting(false);
+    }
+  };
+
+  // Update Display Name
+  const handleUpdateUserName = async () => {
+    if (!editUserName.trim() || !currentUser?.uid) return;
+
+    try {
+      setProfileSubmitting(true);
+      const newName = editUserName.trim();
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      await setDoc(userRef, { name: newName }, { merge: true });
+
+      const updatedUser = { ...currentUser, name: newName };
+      setCurrentUser(updatedUser);
+      localStorage.setItem('smm_session', JSON.stringify(updatedUser));
+
+      setIsEditingName(false);
+      showToast('✅ নাম সফলভাবে পরিবর্তিত হয়েছে!', 'success');
+      haptic('success');
+    } catch (err) {
+      console.error('Error updating name:', err);
+      showToast('Failed to update name', 'error');
+    } finally {
+      setProfileSubmitting(false);
+    }
+  };
+
+  // Admin Actions: Create Custom Task
+  const handleCreateAdminTask = async () => {
+    if (!newTaskTitle.trim()) {
+      showToast('Please enter task title', 'error');
+      return;
+    }
+    const rewardVal = parseFloat(newTaskReward) || 5;
+
+    const newTaskDoc = {
+      title: newTaskTitle.trim(),
+      description: newTaskDesc.trim() || 'Complete task & submit screenshot proof',
+      reward: rewardVal,
+      link: newTaskLink.trim() || '#',
+      icon: newTaskIcon || 'fas fa-tasks',
+      image: newTaskImage || ''
+    };
+
+    try {
+      const docRef = await addDoc(collection(db, 'tasks'), newTaskDoc);
+      setCustomTasks((prev) => [{ id: docRef.id, ...newTaskDoc }, ...prev]);
+      showToast('✅ New task created successfully!', 'success');
+      haptic('success');
+      setNewTaskTitle('');
+      setNewTaskDesc('');
+      setNewTaskReward('5');
+      setNewTaskLink('');
+      setNewTaskImage(null);
+    } catch (e: any) {
+      console.error('Error creating task:', e);
+      showToast('Failed to create task: ' + e.message, 'error');
+    }
+  };
+
+  // Admin Actions: Delete Custom Task
+  const handleDeleteAdminTask = async (taskId: string) => {
+    try {
+      await deleteDoc(doc(db, 'tasks', taskId));
+      setCustomTasks((prev) => prev.filter((t) => t.id !== taskId));
+      showToast('Task deleted successfully', 'info');
+      haptic('heavy');
+    } catch (e: any) {
+      console.error('Error deleting task:', e);
+      showToast('Failed to delete task', 'error');
+    }
+  };
+
+  // Admin Actions: User Balance Increase / Decrease / Set
+  const handleSetUserBalance = async (uid: string, targetBalance: number) => {
+    if (isNaN(targetBalance) || targetBalance < 0) {
+      showToast('Please enter a valid balance amount', 'error');
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'users', uid), { balance: targetBalance });
+      showToast(`User (${uid.slice(0, 8)}) balance set to ৳${targetBalance.toFixed(2)}`, 'success');
+      haptic('success');
+    } catch (e) {
+      console.error('Error updating user balance:', e);
+      showToast('Failed to update balance.', 'error');
+    }
+  };
+
+  const handleAddUserBalance = async (uid: string, addAmount: number) => {
+    if (isNaN(addAmount) || addAmount <= 0) {
+      showToast('Enter a positive amount to add', 'error');
+      return;
+    }
+    try {
+      const uSnap = await getDoc(doc(db, 'users', uid));
+      const curr = uSnap.exists() ? (uSnap.data().balance || 0) : 0;
+      const newBal = curr + addAmount;
+      await updateDoc(doc(db, 'users', uid), { balance: newBal });
+      showToast(`Added +৳${addAmount} → New balance: ৳${newBal.toFixed(2)}`, 'success');
+      haptic('success');
+    } catch (e) {
+      console.error('Error adding balance:', e);
+      showToast('Failed to add balance.', 'error');
+    }
+  };
+
+  const handleSubtractUserBalance = async (uid: string, subAmount: number) => {
+    if (isNaN(subAmount) || subAmount <= 0) {
+      showToast('Enter a positive amount to subtract', 'error');
+      return;
+    }
+    try {
+      const uSnap = await getDoc(doc(db, 'users', uid));
+      const curr = uSnap.exists() ? (uSnap.data().balance || 0) : 0;
+      const newBal = Math.max(0, curr - subAmount);
+      await updateDoc(doc(db, 'users', uid), { balance: newBal });
+      showToast(`Subtracted -৳${subAmount} → New balance: ৳${newBal.toFixed(2)}`, 'info');
+      haptic('heavy');
+    } catch (e) {
+      console.error('Error subtracting balance:', e);
+      showToast('Failed to subtract balance.', 'error');
+    }
+  };
+
+  // Admin Deposit Approval (with customizable amount adjustment before approval)
+  const handleApproveDepositCustom = async (depId: string, uid: string, originalAmount: number) => {
+    const customStr = customDepAmounts[depId];
+    const finalAmount = customStr !== undefined && !isNaN(parseFloat(customStr)) && parseFloat(customStr) >= 0
+      ? parseFloat(customStr)
+      : originalAmount;
+
+    try {
+      const uSnap = await getDoc(doc(db, 'users', uid));
+      const currBal = uSnap.exists() ? (uSnap.data().balance || 0) : 0;
+      const newBal = currBal + finalAmount;
+
+      await updateDoc(doc(db, 'users', uid), { balance: newBal });
+      await updateDoc(doc(db, 'deposit_requests', depId), {
+        status: 'Approved',
+        amount: finalAmount,
+        approvedAt: serverTimestamp()
+      });
+
+      showToast(`Approved ৳${finalAmount} for user ${uid.slice(0, 8)}!`, 'success');
+      haptic('success');
+    } catch (e) {
+      console.error('Error approving deposit:', e);
+      showToast('Failed to approve deposit.', 'error');
+    }
+  };
+
+  const handleRejectDeposit = async (depId: string) => {
+    try {
+      await updateDoc(doc(db, 'deposit_requests', depId), {
+        status: 'Rejected',
+        rejectedAt: serverTimestamp()
+      });
+      showToast('Deposit request rejected', 'warning');
+      haptic('heavy');
+    } catch (e) {
+      console.error('Error rejecting deposit:', e);
+      showToast('Failed to reject deposit.', 'error');
+    }
+  };
+
+  // Sync Payment Methods Configuration from Firestore settings
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'settings', 'payment_methods'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data && typeof data === 'object') {
+          setPaymentMethodsConfig((prev) => ({
+            ...prev,
+            ...data
+          }));
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Save/Update Payment Method Number in Firestore
+  const handleSavePaymentNumber = async (methodKey: string, newNumber: string, newNote?: string) => {
+    if (!newNumber.trim()) {
+      showToast('Payment number cannot be empty', 'error');
+      return;
+    }
+    try {
+      const updated = {
+        ...paymentMethodsConfig,
+        [methodKey]: {
+          ...paymentMethodsConfig[methodKey],
+          number: newNumber.trim(),
+          ...(newNote !== undefined ? { note: newNote.trim() } : {})
+        }
+      };
+      await setDoc(doc(db, 'settings', 'payment_methods'), updated, { merge: true });
+      setPaymentMethodsConfig(updated);
+      showToast(`✅ Updated ${paymentMethodsConfig[methodKey]?.label || methodKey} number to: ${newNumber.trim()}`, 'success');
+      haptic('success');
+    } catch (e: any) {
+      console.error('Error saving payment number:', e);
+      showToast('Failed to save payment number: ' + e.message, 'error');
+    }
+  };
+
+  // Admin Order Status Update
+  const handleUpdateOrderStatus = async (orderId: string, newStatus: string) => {
+    try {
+      await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
+      showToast(`Order #${orderId.slice(-6)} status → ${newStatus}`, 'success');
+      haptic('success');
+    } catch (e) {
+      console.error('Error updating order status:', e);
+      showToast('Failed to update status.', 'error');
+    }
+  };
+
+  // Admin Broadcast Notification
+  const handleSendBroadcast = () => {
+    if (!broadcastTitle.trim() || !broadcastMessage.trim()) {
+      showToast('Please enter notification title and message', 'error');
+      return;
+    }
+    const newNotif = {
+      id: 'n_' + Date.now(),
+      title: broadcastTitle,
+      message: broadcastMessage,
+      time: 'Just now',
+      unread: true,
+      type: broadcastType,
+      image: broadcastImage || undefined
+    };
+    setNotifications((prev) => [newNotif, ...prev]);
+    setBroadcastTitle('');
+    setBroadcastMessage('');
+    setBroadcastImage(null);
+    showToast('Broadcast notification posted to all users!', 'success');
+    haptic('success');
+  };
+
+  // Admin Support Link Add/Delete
+  const handleAddSupportLink = () => {
+    if (!newLinkName.trim() || !newLinkUrl.trim()) {
+      showToast('Link name and URL are required', 'error');
+      return;
+    }
+    const newLink = {
+      id: 'l_' + Date.now(),
+      name: newLinkName.trim(),
+      url: newLinkUrl.trim(),
+      icon: newLinkIcon.trim() || 'fab fa-telegram'
+    };
+    setSupportLinks((prev) => [...prev, newLink]);
+    setNewLinkName('');
+    setNewLinkUrl('');
+    showToast('Support link added!', 'success');
+    haptic('success');
+  };
+
+  const handleDeleteSupportLink = (id: string) => {
+    setSupportLinks((prev) => prev.filter((l) => l.id !== id));
+    showToast('Support link removed', 'info');
+  };
+
+  // Export Backup JSON
+  const handleExportBackup = () => {
+    try {
+      const backupData = {
+        exportedAt: new Date().toISOString(),
+        usersCount: allUsersList.length,
+        ordersCount: allAdminOrdersList.length,
+        users: allUsersList,
+        orders: allAdminOrdersList,
+        services: allServices,
+        deposits: allDepositRequests
+      };
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `smm_panel_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Backup JSON downloaded successfully!', 'success');
+      haptic('success');
+    } catch (e) {
+      showToast('Failed to export backup JSON', 'error');
+    }
+  };
 
   // Handler: Login
   const handleLogin = async () => {
@@ -1098,11 +1840,11 @@ export default function App() {
     const trx = depositTrxId.trim().toUpperCase();
 
     const isCrypto = selectedMethod === 'binance' || selectedMethod === 'usdt_bep20';
-    const minAmt = isCrypto ? 12 : 50;
+    const minAmt = isCrypto ? 12 : 10;
 
     let err = false;
     if (isNaN(amt) || amt < minAmt) {
-      setDepAmtErr(isCrypto ? 'Minimum amount is ৳ 12 (0.10$)' : 'Minimum amount is ৳ 50');
+      setDepAmtErr(isCrypto ? 'Minimum amount is ৳ 12 (0.10$)' : 'Minimum amount is ৳ 10');
       err = true;
     }
     if (amt > 100000) {
@@ -1289,26 +2031,6 @@ export default function App() {
     } catch (e: any) {
       showToast('Approval error: ' + e.message, 'error');
     }
-  };
-
-  // Admin: Reject Deposit
-  const handleRejectDeposit = async (depId: string) => {
-    try {
-      await updateDoc(doc(db, 'deposit_requests', depId), { status: 'Rejected' });
-      showToast('Deposit request rejected', 'info');
-      haptic('light');
-    } catch (e: any) {
-      showToast('Rejection error: ' + e.message, 'error');
-    }
-  };
-
-  // Payment Methods Map
-  const paymentMethodsConfig: Record<string, { label: string; number: string; icon: string; note?: string; isCrypto?: boolean }> = {
-    bkash: { label: 'bKash Merchant', number: '01781119650', icon: 'b' },
-    nagad: { label: 'Nagad Merchant', number: '01781119650', icon: 'N' },
-    rocket: { label: 'Rocket Personal', number: '01781119650', icon: 'R' },
-    binance: { label: 'Binance Pay / UID', number: '584304364', icon: 'B', note: '0.10$ = 12 TK ($1 = 120 TK)', isCrypto: true },
-    usdt_bep20: { label: 'USDT (BEP20 Network)', number: '0x5764a28569ef6efdce93db22656b297ab487cdaa', icon: 'U', note: '0.10$ = 12 TK ($1 = 120 TK)', isCrypto: true }
   };
 
   return (
@@ -1536,22 +2258,38 @@ export default function App() {
           {/* HEADER */}
           <header className="premium-header px-5 pt-7 pb-7">
             <div className="flex items-center justify-between mb-6 relative z-10">
-              <div className="flex items-center gap-3">
+              <div
+                onClick={() => {
+                  setActiveTab('profile');
+                  haptic('light');
+                }}
+                className="flex items-center gap-3 cursor-pointer group"
+                title="View Profile (প্রোফাইল দেখুন)"
+              >
                 <div className="relative">
-                  <img
-                    src={`https://ui-avatars.com/api/?name=${encodeURIComponent(
-                      currentUser?.name || 'User'
-                    )}&background=3b82f6&color=fff&bold=true`}
-                    className="w-12 h-12 rounded-xl object-cover shadow-lg border-2 border-white/10"
-                    alt="Avatar"
-                  />
-                  <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-blue-500 rounded-md flex items-center justify-center border-2 border-[#030712]">
+                  {userPhotoURL || currentUser?.photoURL ? (
+                    <img
+                      src={userPhotoURL || currentUser?.photoURL}
+                      className="w-12 h-12 rounded-xl object-cover shadow-lg border-2 border-amber-400/60 group-hover:scale-105 transition duration-300"
+                      alt="User Avatar"
+                    />
+                  ) : (
+                    <img
+                      src={`https://ui-avatars.com/api/?name=${encodeURIComponent(
+                        currentUser?.name || 'User'
+                      )}&background=3b82f6&color=fff&bold=true`}
+                      className="w-12 h-12 rounded-xl object-cover shadow-lg border-2 border-white/10 group-hover:scale-105 transition duration-300"
+                      alt="User Avatar"
+                    />
+                  )}
+                  <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-md flex items-center justify-center border-2 border-[#030712]">
                     <i className="fas fa-check text-white text-[6px]"></i>
                   </div>
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-base tracking-tight text-white">
-                    {currentUser?.name || 'User'}
+                  <h3 className="font-extrabold text-base tracking-tight text-white group-hover:text-amber-400 transition flex items-center gap-1.5">
+                    <span>{currentUser?.name || 'User'}</span>
+                    <i className="fas fa-chevron-right text-[10px] text-slate-500 group-hover:text-amber-400"></i>
                   </h3>
                   <div className="flex items-center gap-1.5 text-slate-400 text-[10px] font-mono">
                     <i className="fas fa-fingerprint text-[8px] text-blue-400"></i>
@@ -1560,6 +2298,32 @@ export default function App() {
                 </div>
               </div>
               <div className="flex gap-1.5 items-center">
+                {/* Live Orders Button */}
+                <button
+                  onClick={() => {
+                    setShowLiveOrdersModal(true);
+                    haptic('heavy');
+                  }}
+                  className="relative w-9 h-9 bg-red-500/15 border border-red-500/40 rounded-xl flex items-center justify-center text-red-400 cursor-pointer active:scale-95 transition hover:bg-red-500/25"
+                  title="Live Orders (লাইভ অর্ডার)"
+                >
+                  <i className="fas fa-broadcast-tower text-xs text-red-400 animate-pulse"></i>
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping"></span>
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full"></span>
+                </button>
+
+                {/* Tasks Button */}
+                <button
+                  onClick={() => {
+                    setShowTasksModal(true);
+                    haptic('heavy');
+                  }}
+                  className="relative w-9 h-9 bg-amber-500/15 border border-amber-500/40 rounded-xl flex items-center justify-center text-amber-400 cursor-pointer active:scale-95 transition hover:bg-amber-500/25"
+                  title="Daily Tasks & Rewards (টাস্ক)"
+                >
+                  <i className="fas fa-tasks text-xs text-amber-400"></i>
+                </button>
+
                 {/* Search Button */}
                 <button
                   onClick={() => {
@@ -1606,13 +2370,21 @@ export default function App() {
                   )}
                 </button>
 
-                {/* Logout Button */}
+                {/* Admin Mode Toggle Button */}
                 <button
-                  onClick={handleLogout}
-                  className="w-9 h-9 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-slate-400 hover:text-red-400 cursor-pointer active:scale-95 transition"
-                  title="Logout"
+                  onClick={() => {
+                    setActiveTab(activeTab === 'admin' ? 'home' : 'admin');
+                    haptic('heavy');
+                  }}
+                  className={`relative px-3 py-1.5 rounded-xl border flex items-center gap-1.5 font-extrabold text-[10px] cursor-pointer transition active:scale-95 ${
+                    activeTab === 'admin'
+                      ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.5)]'
+                      : 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
+                  }`}
+                  title="Admin Panel (এডমিন প্যানেল)"
                 >
-                  <i className="fas fa-sign-out-alt text-xs"></i>
+                  <i className="fas fa-crown text-amber-400"></i>
+                  <span>ADMIN</span>
                 </button>
               </div>
             </div>
@@ -1642,6 +2414,59 @@ export default function App() {
                 </div>
                 <h2 className="text-xl font-black text-white tracking-tight">{userTotalOrders}</h2>
               </div>
+            </div>
+
+            {/* USER QUICK FEATURE BUTTONS: LIVE ORDERS & TASKS */}
+            <div className="grid grid-cols-2 gap-2.5 mt-3 relative z-10">
+              <button
+                onClick={() => {
+                  setShowLiveOrdersModal(true);
+                  haptic('heavy');
+                }}
+                className="group relative overflow-hidden p-3 rounded-2xl bg-gradient-to-r from-red-950/70 via-rose-900/50 to-slate-900/90 border border-red-500/40 hover:border-red-400/80 shadow-lg text-left transition active:scale-95 flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="relative w-8 h-8 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400">
+                    <i className="fas fa-satellite-dish text-xs animate-pulse"></i>
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping"></span>
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full"></span>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1">
+                      <span className="font-extrabold text-xs text-white">লাইভ অর্ডার</span>
+                      <span className="text-[8px] font-black bg-red-500 text-white px-1.5 py-0.2 rounded-full uppercase animate-pulse">
+                        LIVE ⚡
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-slate-300 font-medium">Realtime Orders</p>
+                  </div>
+                </div>
+                <i className="fas fa-chevron-right text-[10px] text-slate-400 group-hover:text-white transition"></i>
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowTasksModal(true);
+                  haptic('heavy');
+                }}
+                className="group relative overflow-hidden p-3 rounded-2xl bg-gradient-to-r from-amber-950/70 via-yellow-900/50 to-slate-900/90 border border-amber-500/40 hover:border-amber-400/80 shadow-lg text-left transition active:scale-95 flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                    <i className="fas fa-tasks text-xs"></i>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1">
+                      <span className="font-extrabold text-xs text-white">টাস্ক (Tasks)</span>
+                      <span className="text-[8px] font-black bg-amber-500 text-black px-1.5 py-0.2 rounded-full">
+                        BONUS
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-amber-300/90 font-medium">Complete & Earn ৳</p>
+                  </div>
+                </div>
+                <i className="fas fa-chevron-right text-[10px] text-slate-400 group-hover:text-white transition"></i>
+              </button>
             </div>
           </header>
 
@@ -2147,15 +2972,17 @@ export default function App() {
               </div>
 
               {/* Quick Amount Selector */}
-              <div className="flex gap-2 mb-4">
-                {['12', '50', '100', '500', '1000'].map((amt) => (
+              <div className="flex overflow-x-auto gap-2 mb-4 scrollbar-none pb-1">
+                {['10', '12', '50', '60', '100', '500', '1000'].map((amt) => (
                   <button
                     key={amt}
                     onClick={() => {
                       setDepositAmount(amt);
                       haptic('light');
                     }}
-                    className="deposit-method flex-1 text-center"
+                    className={`deposit-method flex-1 min-w-[50px] text-center font-bold transition ${
+                      depositAmount === amt ? 'bg-blue-600 text-white border-blue-400 shadow-md' : ''
+                    }`}
                   >
                     ৳ {amt}
                   </button>
@@ -2238,16 +3065,22 @@ export default function App() {
               {/* Form */}
               <div className="glass-card p-5 space-y-4 mb-6">
                 <div>
-                  <label className="form-label">
-                    <i className="fas fa-money-bill mr-1 text-[8px]"></i> Amount (BDT / ৳)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="form-label mb-0">
+                      <i className="fas fa-money-bill mr-1 text-[8px]"></i> Amount (BDT / ৳)
+                    </label>
+                    <span className="text-[10px] font-bold text-blue-400">
+                      Selected: ৳ {parseFloat(depositAmount) || 0}
+                    </span>
+                  </div>
+
                   <input
                     type="number"
                     className="input-modern"
                     placeholder={
                       paymentMethodsConfig[selectedMethod].isCrypto
                         ? 'Enter amount in BDT (e.g. 12 TK = $0.10)'
-                        : 'Enter amount (min ৳ 50)'
+                        : 'Enter amount (min ৳ 10)'
                     }
                     value={depositAmount}
                     onChange={(e) => {
@@ -2255,6 +3088,38 @@ export default function App() {
                       setDepAmtErr('');
                     }}
                   />
+
+                  {/* Quick Increase / Decrease Buttons */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    <span className="text-[9px] font-bold text-slate-400 mr-1">Adjust (বাড়ান/কমান):</span>
+                    {[
+                      { label: '+10 ৳', val: 10 },
+                      { label: '+50 ৳', val: 50 },
+                      { label: '+100 ৳', val: 100 },
+                      { label: '-10 ৳', val: -10 },
+                      { label: '-50 ৳', val: -50 }
+                    ].map((btn) => (
+                      <button
+                        key={btn.label}
+                        type="button"
+                        onClick={() => {
+                          const curr = parseFloat(depositAmount) || 0;
+                          const nextVal = Math.max(0, curr + btn.val);
+                          setDepositAmount(String(nextVal));
+                          setDepAmtErr('');
+                          haptic('light');
+                        }}
+                        className={`px-2.5 py-1 rounded-lg font-extrabold text-[10px] border transition active:scale-95 ${
+                          btn.val > 0
+                            ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/30'
+                            : 'bg-red-500/15 hover:bg-red-500/25 text-red-300 border-red-500/30'
+                        }`}
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
+                  </div>
+
                   {depAmtErr && <p className="field-error show">{depAmtErr}</p>}
                 </div>
 
@@ -2349,72 +3214,1490 @@ export default function App() {
             </section>
           )}
 
-          {/* SUPPORT TAB */}
-          {activeTab === 'support' && (
-            <section className="px-5 mt-5">
-              <h2 className="section-title mb-5 text-white">Support</h2>
+          {/* PROFILE TAB */}
+          {activeTab === 'profile' && (
+            <section className="px-4 sm:px-6 mt-4 pb-20 animate-fade-in space-y-5">
+              {/* Profile Card Header */}
+              <div className="glass-card p-6 border border-amber-500/30 bg-gradient-to-br from-slate-900/90 via-[#0b1329] to-slate-900 relative overflow-hidden shadow-[0_0_40px_rgba(245,158,11,0.15)] text-center rounded-3xl">
+                {/* Background Decorative Glow */}
+                <div className="absolute top-0 right-0 w-36 h-36 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
+                <div className="absolute bottom-0 left-0 w-36 h-36 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
-              <div className="grid grid-cols-2 gap-3 mb-6">
-                <a
-                  href="https://t.me/RF2_SMM"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="glass-card p-5 text-center block active:scale-95 transition"
-                >
-                  <div className="w-12 h-12 bg-blue-500/15 rounded-xl flex items-center justify-center mx-auto text-blue-400 text-xl mb-2">
-                    <i className="fab fa-telegram"></i>
+                {/* Profile Avatar with Upload Camera Badge */}
+                <div className="relative w-28 h-28 mx-auto mb-3 group">
+                  <div className="w-28 h-28 rounded-3xl overflow-hidden border-2 border-amber-400/60 shadow-2xl bg-slate-950 flex items-center justify-center relative ring-4 ring-amber-500/10">
+                    {userPhotoURL || currentUser?.photoURL ? (
+                      <img
+                        src={userPhotoURL || currentUser?.photoURL}
+                        alt="Profile"
+                        className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                      />
+                    ) : (
+                      <img
+                        src={`https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          currentUser?.name || 'User'
+                        )}&background=3b82f6&color=fff&bold=true&size=200`}
+                        alt="Avatar"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
+
+                    {profileSubmitting && (
+                      <div className="absolute inset-0 bg-black/75 flex items-center justify-center backdrop-blur-xs">
+                        <span className="loading-spinner"></span>
+                      </div>
+                    )}
                   </div>
-                  <h3 className="font-bold text-xs text-white">Telegram</h3>
-                  <p className="text-[9px] text-slate-500 mt-0.5">Chat with Admin</p>
-                </a>
-                <a
-                  href="https://wa.me/8801781119650"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="glass-card p-5 text-center block active:scale-95 transition"
-                >
-                  <div className="w-12 h-12 bg-green-500/15 rounded-xl flex items-center justify-center mx-auto text-green-400 text-xl mb-2">
-                    <i className="fab fa-whatsapp"></i>
+
+                  {/* Upload Camera Icon Button */}
+                  <label
+                    className="absolute -bottom-2 -right-2 w-10 h-10 rounded-2xl bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-black flex items-center justify-center shadow-xl cursor-pointer border-2 border-[#030712] transition active:scale-95 group/btn"
+                    title="Change Profile Picture (ছবি পরিবর্তন করুন)"
+                  >
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProfilePicUpload}
+                      className="hidden"
+                      disabled={profileSubmitting}
+                    />
+                    <i className="fas fa-camera text-sm"></i>
+                  </label>
+
+                  {/* Remove Photo option if custom photo exists */}
+                  {(userPhotoURL || currentUser?.photoURL) && (
+                    <button
+                      onClick={handleRemoveProfilePic}
+                      disabled={profileSubmitting}
+                      className="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-red-600/90 text-white flex items-center justify-center text-xs shadow-md hover:scale-110 transition border border-white/20"
+                      title="Remove Photo"
+                    >
+                      <i className="fas fa-times"></i>
+                    </button>
+                  )}
+                </div>
+
+                {/* User Name & Name Edit Form */}
+                {isEditingName ? (
+                  <div className="flex items-center justify-center gap-2 max-w-xs mx-auto mt-2">
+                    <input
+                      type="text"
+                      className="input-modern py-1.5 px-3 text-xs text-center font-bold"
+                      value={editUserName}
+                      onChange={(e) => setEditUserName(e.target.value)}
+                      placeholder="Enter full name"
+                    />
+                    <button
+                      onClick={handleUpdateUserName}
+                      className="px-3 py-1.5 bg-emerald-500 text-black text-xs font-black rounded-xl hover:bg-emerald-400 transition shadow"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setIsEditingName(false)}
+                      className="px-2 py-1.5 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl hover:bg-slate-700"
+                    >
+                      Cancel
+                    </button>
                   </div>
-                  <h3 className="font-bold text-xs text-white">WhatsApp</h3>
-                  <p className="text-[9px] text-slate-500 mt-0.5">24/7 Available</p>
-                </a>
+                ) : (
+                  <div className="flex items-center justify-center gap-2 mt-2">
+                    <h2 className="text-xl font-black text-white">{currentUser?.name || 'User'}</h2>
+                    <button
+                      onClick={() => {
+                        setEditUserName(currentUser?.name || '');
+                        setIsEditingName(true);
+                      }}
+                      className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-amber-400 flex items-center justify-center text-xs transition border border-white/5"
+                      title="Edit Display Name"
+                    >
+                      <i className="fas fa-pen"></i>
+                    </button>
+                  </div>
+                )}
+
+                {/* User Meta Badges */}
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
+                  <span className="text-[11px] font-mono font-bold text-slate-300 bg-white/5 px-3 py-1 rounded-full border border-white/10 flex items-center gap-1.5">
+                    <i className="fas fa-at text-amber-400"></i>
+                    <span>{currentUser?.username || currentUser?.uid.slice(0, 8)}</span>
+                  </span>
+                  <span className="text-[11px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20 flex items-center gap-1.5">
+                    <i className="fas fa-shield-check text-emerald-400"></i>
+                    <span>VERIFIED USER</span>
+                  </span>
+                </div>
               </div>
 
-              {/* Links Card */}
-              <div className="glass-card overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-slate-800">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                    Official Community
-                  </h4>
-                </div>
-                <div
-                  className="flex justify-between items-center px-4 py-3.5 cursor-pointer border-b border-slate-800 hover:bg-white/5"
-                  onClick={() => {
-                    navigator.clipboard.writeText('https://t.me/RF2_SMM');
-                    showToast('Telegram Link Copied', 'success');
-                  }}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <i className="fab fa-telegram text-blue-400 text-sm"></i>
-                    <span className="font-semibold text-xs text-white">Telegram Group</span>
+              {/* Account Details & Stats */}
+              <div className="glass-card p-4 space-y-3">
+                <h4 className="text-xs font-black text-white uppercase tracking-wider flex items-center justify-between border-b border-white/5 pb-2">
+                  <div className="flex items-center gap-2">
+                    <i className="fas fa-id-card text-amber-400"></i>
+                    <span>Account Details (একাউন্ট তথ্য)</span>
                   </div>
-                  <i className="fas fa-copy text-[10px] text-slate-500"></i>
-                </div>
-                <div
-                  className="flex justify-between items-center px-4 py-3.5 cursor-pointer hover:bg-white/5"
-                  onClick={() => {
-                    navigator.clipboard.writeText('https://www.facebook.com/share/1EKKUHMxCw/');
-                    showToast('Facebook Link Copied', 'success');
-                  }}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <i className="fab fa-facebook text-blue-500 text-sm"></i>
-                    <span className="font-semibold text-xs text-white">Facebook Page</span>
+                  <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">ACTIVE</span>
+                </h4>
+
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-white/5">
+                    <span className="text-slate-400">User ID (UID):</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-amber-300 font-bold">{currentUser?.uid}</span>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(currentUser?.uid || '');
+                          showToast('UID Copied to clipboard', 'success');
+                        }}
+                        className="text-[10px] text-slate-400 hover:text-white bg-white/5 px-2 py-0.5 rounded transition"
+                      >
+                        <i className="fas fa-copy"></i>
+                      </button>
+                    </div>
                   </div>
-                  <i className="fas fa-copy text-[10px] text-slate-500"></i>
+
+                  <div className="flex justify-between items-center py-1 border-b border-white/5">
+                    <span className="text-slate-400">Username:</span>
+                    <span className="font-mono text-white font-bold">@{currentUser?.username}</span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1 border-b border-white/5">
+                    <span className="text-slate-400">Full Name:</span>
+                    <span className="text-white font-bold">{currentUser?.name}</span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1 border-b border-white/5">
+                    <span className="text-slate-400">Current Balance:</span>
+                    <span className="font-mono text-emerald-400 font-extrabold text-sm">৳ {userBalance.toFixed(2)}</span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1">
+                    <span className="text-slate-400">Total Orders:</span>
+                    <span className="font-mono text-blue-400 font-extrabold text-sm">{userTotalOrders}</span>
+                  </div>
+                </div>
+
+                {/* Quick Action Buttons */}
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                  <button
+                    onClick={() => {
+                      setActiveTab('funds');
+                      haptic('light');
+                    }}
+                    className="py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-extrabold flex items-center justify-center gap-1.5 transition border border-emerald-500/30 active:scale-95"
+                  >
+                    <i className="fas fa-plus-circle"></i> ADD FUNDS (ডিপোজিট)
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveTab('orders');
+                      haptic('light');
+                    }}
+                    className="py-2 px-3 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[10px] font-extrabold flex items-center justify-center gap-1.5 transition border border-blue-500/30 active:scale-95"
+                  >
+                    <i className="fas fa-list"></i> MY ORDERS (অর্ডার)
+                  </button>
                 </div>
               </div>
+
+              {/* Earn Free Rewards Banner */}
+              <div
+                onClick={() => {
+                  setShowTasksModal(true);
+                  haptic('heavy');
+                }}
+                className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-yellow-500/10 to-transparent border border-amber-500/30 flex items-center justify-between cursor-pointer hover:border-amber-400 transition active:scale-95"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/30 text-amber-400 flex items-center justify-center text-lg border border-amber-500/40">
+                    <i className="fas fa-gift"></i>
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-xs text-white">Daily Tasks & Screenshot Rewards</h4>
+                    <p className="text-[10px] text-amber-200/80">টাস্ক কমপ্লিট করে ফ্রিতে টাকা ইনকাম করুন</p>
+                  </div>
+                </div>
+                <i className="fas fa-chevron-right text-amber-400 text-xs"></i>
+              </div>
+
+              {/* Support & Community Section */}
+              <div className="glass-card p-4 space-y-3">
+                <h4 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2 border-b border-white/5 pb-2">
+                  <i className="fas fa-headset text-amber-400"></i>
+                  <span>Help & Support Center (সাপোর্ট ও সোশ্যাল লিঙ্ক)</span>
+                </h4>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <a
+                    href="https://t.me/RF2_SMM"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-3.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 flex items-center gap-3 transition active:scale-95"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center text-lg">
+                      <i className="fab fa-telegram-plane"></i>
+                    </div>
+                    <div>
+                      <h5 className="font-extrabold text-xs text-white">Telegram</h5>
+                      <p className="text-[9px] text-sky-300">Admin Chat</p>
+                    </div>
+                  </a>
+
+                  <a
+                    href="https://wa.me/8801781119650"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-3.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 flex items-center gap-3 transition active:scale-95"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg">
+                      <i className="fab fa-whatsapp"></i>
+                    </div>
+                    <div>
+                      <h5 className="font-extrabold text-xs text-white">WhatsApp</h5>
+                      <p className="text-[9px] text-emerald-300">24/7 Available</p>
+                    </div>
+                  </a>
+                </div>
+
+                <div className="pt-2 border-t border-white/5 space-y-2">
+                  <div
+                    onClick={() => {
+                      navigator.clipboard.writeText('https://t.me/RF2_SMM');
+                      showToast('Telegram Link Copied', 'success');
+                    }}
+                    className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-white/5 flex items-center justify-between cursor-pointer transition text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <i className="fab fa-telegram text-sky-400"></i>
+                      <span className="font-semibold text-white">Official Telegram Group</span>
+                    </div>
+                    <i className="fas fa-copy text-slate-500 text-[10px]"></i>
+                  </div>
+
+                  <div
+                    onClick={() => {
+                      navigator.clipboard.writeText('https://www.facebook.com/share/1EKKUHMxCw/');
+                      showToast('Facebook Link Copied', 'success');
+                    }}
+                    className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-white/5 flex items-center justify-between cursor-pointer transition text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <i className="fab fa-facebook text-blue-500"></i>
+                      <span className="font-semibold text-white">Facebook Official Page</span>
+                    </div>
+                    <i className="fas fa-copy text-slate-500 text-[10px]"></i>
+                  </div>
+                </div>
+              </div>
+
+              {/* Logout Button */}
+              <button
+                onClick={handleLogout}
+                className="w-full py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition active:scale-95"
+              >
+                <i className="fas fa-right-from-bracket"></i>
+                <span>LOGOUT FROM ACCOUNT (লগআউট করুন)</span>
+              </button>
+            </section>
+          )}
+
+          {/* ADMIN TAB */}
+          {activeTab === 'admin' && (
+            <section className="px-4 sm:px-6 mt-4 pb-20 animate-fade-in">
+              {/* Top Banner */}
+              <div className="p-5 rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-amber-500/30 shadow-[0_0_30px_rgba(245,158,11,0.2)] mb-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white text-lg shadow-lg">
+                      <i className="fas fa-crown"></i>
+                    </div>
+                    <div>
+                      <h2 className="text-base font-black text-white flex items-center gap-2">
+                        <span>SMM Panel Admin Dashboard</span>
+                        <span className="text-[9px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30 font-bold">
+                          FULL CONTROL
+                        </span>
+                      </h2>
+                      <p className="text-[10px] text-slate-400">Manage users, deposits, orders, services & settings</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleExportBackup}
+                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 border border-white/10 flex items-center gap-1.5 transition active:scale-95"
+                    >
+                      <i className="fas fa-download text-amber-400"></i>
+                      <span>Backup JSON</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Stat Counters Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-4 pt-4 border-t border-white/10">
+                  <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase">Total Users</span>
+                    <div className="text-lg font-black text-white mt-0.5">{allUsersList.length}</div>
+                  </div>
+                  <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase">Total Orders</span>
+                    <div className="text-lg font-black text-blue-400 mt-0.5">{allAdminOrdersList.length}</div>
+                  </div>
+                  <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                    <span className="text-[9px] font-bold text-amber-400/80 uppercase">Pending Deposits</span>
+                    <div className="text-lg font-black text-amber-400 mt-0.5">
+                      {allDepositRequests.filter((d) => d.status === 'Pending').length}
+                    </div>
+                  </div>
+                  <div className="bg-white/5 p-3 rounded-2xl border border-white/5">
+                    <span className="text-[9px] font-bold text-emerald-400/80 uppercase">Services Active</span>
+                    <div className="text-lg font-black text-emerald-400 mt-0.5">{allServices.length}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sub Navigation Bar */}
+              <div className="flex overflow-x-auto gap-2 p-1.5 bg-slate-900/90 rounded-2xl border border-white/10 mb-5 scrollbar-none">
+                {[
+                  { id: 'users', label: 'Users & Balance', icon: 'fas fa-users' },
+                  { id: 'payment', label: 'Payment Numbers', icon: 'fas fa-mobile-alt' },
+                  { id: 'deposits', label: 'Deposit Requests', icon: 'fas fa-wallet' },
+                  { id: 'orders', label: 'Orders Control', icon: 'fas fa-list-check' },
+                  { id: 'services', label: 'Services (API)', icon: 'fas fa-server' },
+                  { id: 'notifications', label: 'Broadcast', icon: 'fas fa-bullhorn' },
+                  { id: 'links', label: 'Support Links', icon: 'fas fa-link' },
+                  { id: 'settings', label: 'Settings', icon: 'fas fa-cog' },
+                  { id: 'tasks', label: 'Tasks & Screenshots Proof (টাস্ক প্রুফ)', icon: 'fas fa-tasks' }
+                ].map((st) => (
+                  <button
+                    key={st.id}
+                    onClick={() => {
+                      setAdminSubTab(st.id as any);
+                      haptic('light');
+                    }}
+                    className={`whitespace-nowrap px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                      adminSubTab === st.id
+                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <i className={st.icon}></i>
+                    <span>{st.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* SUB TAB 1: USERS & BALANCE (ডিপোজিট এমাউন্ট বাড়ানো-কমানো) */}
+              {adminSubTab === 'users' && (
+                <div className="space-y-4">
+                  {/* Search bar */}
+                  <div className="relative">
+                    <input
+                      type="text"
+                      className="input-modern pl-10 text-xs"
+                      placeholder="Search User by UID or Name..."
+                      value={adminSearch}
+                      onChange={(e) => setAdminSearch(e.target.value)}
+                    />
+                    <i className="fas fa-search absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                  </div>
+
+                  {/* Users Cards */}
+                  <div className="space-y-3">
+                    {allUsersList
+                      .filter((u) => {
+                        const q = adminSearch.toLowerCase().trim();
+                        if (!q) return true;
+                        return u.uid.toLowerCase().includes(q) || (u.name || '').toLowerCase().includes(q);
+                      })
+                      .map((u) => {
+                        const currentVal = userBalanceAdjustInput[u.uid] || '';
+                        const numVal = parseFloat(currentVal) || 0;
+
+                        return (
+                          <div
+                            key={u.uid}
+                            className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 space-y-3 shadow-lg"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-sm">
+                                  <i className="fas fa-user"></i>
+                                </div>
+                                <div>
+                                  <h4 className="font-extrabold text-sm text-white">{u.name || 'User'}</h4>
+                                  <p className="text-[10px] text-slate-400 font-mono">UID: {u.uid}</p>
+                                </div>
+                              </div>
+
+                              <div className="text-right">
+                                <span className="text-[9px] text-slate-500 font-bold uppercase block">Current Balance</span>
+                                <span className="text-base font-black text-emerald-400">৳ {(u.balance || 0).toFixed(2)}</span>
+                              </div>
+                            </div>
+
+                            {/* Quick Balance Adjustment Row (ডিপোজিট বাড়ানো / কমানো) */}
+                            <div className="bg-black/30 p-3 rounded-xl border border-white/5 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-extrabold text-slate-300 flex items-center gap-1">
+                                  <i className="fas fa-coins text-amber-400"></i>
+                                  <span>Adjust Balance (ডিপোজিট এমাউন্ট বাড়ান / কমান):</span>
+                                </span>
+                              </div>
+
+                              {/* Quick buttons */}
+                              <div className="flex flex-wrap gap-1.5">
+                                {[50, 100, 500, 1000].map((amt) => (
+                                  <button
+                                    key={amt}
+                                    onClick={() => handleAddUserBalance(u.uid, amt)}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-extrabold text-[10px] border border-emerald-500/30 transition active:scale-95"
+                                  >
+                                    +৳{amt}
+                                  </button>
+                                ))}
+                                {[50, 100, 500].map((amt) => (
+                                  <button
+                                    key={amt}
+                                    onClick={() => handleSubtractUserBalance(u.uid, amt)}
+                                    className="px-2.5 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 font-extrabold text-[10px] border border-red-500/30 transition active:scale-95"
+                                  >
+                                    -৳{amt}
+                                  </button>
+                                ))}
+                              </div>
+
+                              {/* Custom input */}
+                              <div className="flex items-center gap-2 pt-1">
+                                <input
+                                  type="number"
+                                  className="input-modern text-xs py-1.5 px-3"
+                                  placeholder="Enter custom amount..."
+                                  value={currentVal}
+                                  onChange={(e) =>
+                                    setUserBalanceAdjustInput((prev) => ({
+                                      ...prev,
+                                      [u.uid]: e.target.value
+                                    }))
+                                  }
+                                />
+                                <button
+                                  onClick={() => handleAddUserBalance(u.uid, numVal)}
+                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] rounded-xl transition active:scale-95 flex-shrink-0"
+                                >
+                                  ADD (+)
+                                </button>
+                                <button
+                                  onClick={() => handleSubtractUserBalance(u.uid, numVal)}
+                                  className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold text-[10px] rounded-xl transition active:scale-95 flex-shrink-0"
+                                >
+                                  SUB (-)
+                                </button>
+                                <button
+                                  onClick={() => handleSetUserBalance(u.uid, numVal)}
+                                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-[10px] rounded-xl transition active:scale-95 flex-shrink-0"
+                                >
+                                  SET EXACT
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {/* SUB TAB: PAYMENT NUMBERS MANAGEMENT (পেমেন্ট নম্বর চেঞ্জ) */}
+              {adminSubTab === 'payment' && (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-900/40 to-indigo-900/40 border border-blue-500/30 shadow-lg">
+                    <div className="flex items-center gap-2.5 mb-1">
+                      <i className="fas fa-mobile-alt text-amber-400 text-base"></i>
+                      <h3 className="font-extrabold text-sm text-white">Payment Method Numbers & Details</h3>
+                    </div>
+                    <p className="text-[11px] text-slate-300">
+                      এখানে যে কোনো পেমেন্ট মেথডের (bKash, Nagad, Rocket, Binance, USDT) নম্বর বা ওয়ালেট নম্বর চেঞ্জ করলে তা সাথে সাথে সকল ইউজারের Add Funds পেজে লাইভ আপডেট হয়ে যাবে।
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3.5">
+                    {(Object.entries(paymentMethodsConfig) as [string, { label: string; number: string; icon: string; note?: string; isCrypto?: boolean }][]).map(([key, config]) => {
+                      const editState = editingPaymentNumbers[key] || {
+                        number: config.number,
+                        note: config.note || ''
+                      };
+
+                      return (
+                        <div
+                          key={key}
+                          className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 space-y-3 shadow-lg hover:border-white/20 transition"
+                        >
+                          <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 font-black text-xs flex items-center justify-center">
+                                {config.icon}
+                              </div>
+                              <div>
+                                <h4 className="font-extrabold text-xs text-white">{config.label}</h4>
+                                <span className="text-[9px] text-slate-400 font-mono">key: {key}</span>
+                              </div>
+                            </div>
+
+                            <span className="text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                              Active
+                            </span>
+                          </div>
+
+                          <div className="space-y-2.5">
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-300 block mb-1">
+                                Phone Number / Wallet Address / UID (নম্বর):
+                              </label>
+                              <input
+                                type="text"
+                                className="input-modern font-mono text-xs py-2 px-3 text-amber-300 font-bold"
+                                value={editState.number}
+                                onChange={(e) =>
+                                  setEditingPaymentNumbers((prev) => ({
+                                    ...prev,
+                                    [key]: { ...editState, number: e.target.value }
+                                  }))
+                                }
+                                placeholder="Enter payment number..."
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-300 block mb-1">
+                                Note / Instruction / Rate details (নির্দেশিকা):
+                              </label>
+                              <input
+                                type="text"
+                                className="input-modern text-xs py-2 px-3 text-slate-300"
+                                value={editState.note}
+                                onChange={(e) =>
+                                  setEditingPaymentNumbers((prev) => ({
+                                    ...prev,
+                                    [key]: { ...editState, note: e.target.value }
+                                  }))
+                                }
+                                placeholder="e.g. Cashout Only / 0.10$ = 12 TK"
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleSavePaymentNumber(key, editState.number, editState.note)}
+                              className="w-full mt-1 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs shadow-md transition active:scale-95 flex items-center justify-center gap-1.5"
+                            >
+                              <i className="fas fa-save"></i>
+                              <span>SAVE {config.label.toUpperCase()} NUMBER</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* SUB TAB 2: DEPOSIT REQUESTS (ডিপোজিট কন্ট্রোল & এমাউন্ট এডিট) */}
+              {adminSubTab === 'deposits' && (
+                <div className="space-y-3">
+                  {/* Filter tabs */}
+                  <div className="flex gap-2">
+                    {(['all', 'Pending', 'Approved', 'Rejected'] as const).map((f) => (
+                      <button
+                        key={f}
+                        onClick={() => setDepFilter(f)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition ${
+                          depFilter === f
+                            ? 'bg-amber-500 text-slate-950 shadow'
+                            : 'bg-slate-900 border border-white/10 text-slate-400'
+                        }`}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+
+                  {allDepositRequests
+                    .filter((d) => (depFilter === 'all' ? true : d.status === depFilter))
+                    .map((dep) => {
+                      const currentEditable = customDepAmounts[dep.id] ?? String(dep.amount);
+
+                      return (
+                        <div
+                          key={dep.id}
+                          className={`p-4 rounded-2xl border transition-all space-y-3 ${
+                            dep.status === 'Pending'
+                              ? 'bg-slate-900/90 border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)]'
+                              : dep.status === 'Approved'
+                              ? 'bg-slate-900/60 border-emerald-500/30'
+                              : 'bg-slate-900/40 border-red-500/30 opacity-75'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`text-[9px] font-black px-2 py-0.5 rounded-md ${
+                                  dep.status === 'Approved'
+                                    ? 'bg-emerald-500/20 text-emerald-400'
+                                    : dep.status === 'Rejected'
+                                    ? 'bg-red-500/20 text-red-400'
+                                    : 'bg-amber-500/20 text-amber-400 animate-pulse'
+                                }`}
+                              >
+                                {dep.status}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-400">
+                                {dep.method.toUpperCase()}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-500">
+                              {dep.timestamp
+                                ? new Date(dep.timestamp.seconds * 1000).toLocaleString('en-BD', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })
+                                : 'Recent'}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-[9px] text-slate-500 font-bold uppercase block">User UID</span>
+                              <span className="font-mono text-slate-300 font-bold">{dep.uid}</span>
+                            </div>
+                            <div>
+                              <span className="text-[9px] text-slate-500 font-bold uppercase block">Trx ID / Hash</span>
+                              <span className="font-mono text-blue-400 font-extrabold">{dep.trxId}</span>
+                            </div>
+                          </div>
+
+                          {/* Editable Deposit Amount before Approval */}
+                          <div className="bg-black/40 p-3 rounded-xl border border-white/5 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-slate-400 font-bold">Requested Deposit Amount:</span>
+                              <span className="text-sm font-black text-white">৳ {dep.amount}</span>
+                            </div>
+
+                            {dep.status === 'Pending' && (
+                              <div className="space-y-2 pt-1 border-t border-white/5">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] font-extrabold text-amber-400 flex items-center gap-1">
+                                    <i className="fas fa-edit"></i>
+                                    <span>Edit Deposit Amount (এমাউন্ট বাড়ান বা কমান):</span>
+                                  </label>
+                                  {parseFloat(currentEditable) !== dep.amount && (
+                                    <span className="text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full animate-pulse">
+                                      ৳{dep.amount} → ৳{currentEditable}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Quick Adjustment Buttons (+10, +50, -10, Reset) */}
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const val = (parseFloat(currentEditable) || dep.amount) + 10;
+                                      setCustomDepAmounts((prev) => ({ ...prev, [dep.id]: String(val) }));
+                                    }}
+                                    className="px-2 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-extrabold text-[10px] rounded-lg border border-emerald-500/30 transition active:scale-95"
+                                  >
+                                    +10 ৳
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const val = (parseFloat(currentEditable) || dep.amount) + 50;
+                                      setCustomDepAmounts((prev) => ({ ...prev, [dep.id]: String(val) }));
+                                    }}
+                                    className="px-2 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-extrabold text-[10px] rounded-lg border border-emerald-500/30 transition active:scale-95"
+                                  >
+                                    +50 ৳
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const val = Math.max(0, (parseFloat(currentEditable) || dep.amount) - 10);
+                                      setCustomDepAmounts((prev) => ({ ...prev, [dep.id]: String(val) }));
+                                    }}
+                                    className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-extrabold text-[10px] rounded-lg border border-red-500/30 transition active:scale-95"
+                                  >
+                                    -10 ৳
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCustomDepAmounts((prev) => ({ ...prev, [dep.id]: String(dep.amount) }));
+                                    }}
+                                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[10px] rounded-lg border border-white/10 transition active:scale-95"
+                                  >
+                                    Reset (৳{dep.amount})
+                                  </button>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    className="input-modern text-xs py-1.5 px-3 font-mono font-bold text-amber-300"
+                                    placeholder="Enter final amount..."
+                                    value={currentEditable}
+                                    onChange={(e) =>
+                                      setCustomDepAmounts((prev) => ({
+                                        ...prev,
+                                        [dep.id]: e.target.value
+                                      }))
+                                    }
+                                  />
+                                  <span className="text-xs font-bold text-slate-400">৳</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Actions */}
+                          {dep.status === 'Pending' && (
+                            <div className="flex gap-2 pt-1">
+                              <button
+                                onClick={() =>
+                                  handleApproveDepositCustom(dep.id, dep.uid, parseFloat(currentEditable) || dep.amount)
+                                }
+                                className="flex-1 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-xs rounded-xl shadow transition active:scale-95 flex items-center justify-center gap-1.5"
+                              >
+                                <i className="fas fa-check-circle"></i>
+                                <span>APPROVE & CREDIT (৳ {currentEditable})</span>
+                              </button>
+                              <button
+                                onClick={() => handleRejectDeposit(dep.id)}
+                                className="px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 font-bold text-xs rounded-xl transition active:scale-95 flex items-center justify-center gap-1"
+                              >
+                                <i className="fas fa-times-circle"></i>
+                                <span>REJECT</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+
+              {/* SUB TAB 3: ORDERS CONTROL */}
+              {adminSubTab === 'orders' && (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-extrabold text-slate-300">All Orders ({allAdminOrdersList.length})</span>
+                    <select
+                      className="input-modern py-1 px-3 text-xs w-auto"
+                      value={orderStatusFilter}
+                      onChange={(e) => setOrderStatusFilter(e.target.value)}
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="Pending">Pending</option>
+                      <option value="Processing">Processing</option>
+                      <option value="In Progress">In Progress</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Cancelled">Cancelled</option>
+                    </select>
+                  </div>
+
+                  {allAdminOrdersList
+                    .filter((o) => (orderStatusFilter === 'all' ? true : o.status === orderStatusFilter))
+                    .map((o) => (
+                      <div key={o.id} className="glass-card p-4 space-y-2">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-mono text-slate-400 font-bold">#{o.id.slice(-8)}</span>
+                          <span className="font-mono text-slate-400 text-[10px]">User: {o.uid.slice(0, 8)}</span>
+                        </div>
+
+                        <h4 className="font-extrabold text-xs text-white leading-snug">{o.service}</h4>
+                        <p className="text-[10px] text-slate-400 font-mono truncate">{o.link}</p>
+
+                        <div className="flex justify-between items-center pt-2 border-t border-white/5">
+                          <div className="text-xs">
+                            <span className="text-slate-400">Qty: {o.qty?.toLocaleString()} | </span>
+                            <span className="text-emerald-400 font-bold">৳ {o.cost?.toFixed(2)}</span>
+                          </div>
+
+                          {/* Change Status Dropdown */}
+                          <div className="flex items-center gap-2">
+                            <select
+                              className="input-modern text-xs py-1 px-2.5 w-auto"
+                              value={o.status || 'Pending'}
+                              onChange={(e) => handleUpdateOrderStatus(o.id, e.target.value)}
+                            >
+                              <option value="Pending">Pending</option>
+                              <option value="Processing">Processing</option>
+                              <option value="In Progress">In Progress</option>
+                              <option value="Completed">Completed</option>
+                              <option value="Cancelled">Cancelled</option>
+                            </select>
+
+                            {(!o.apiOrderId || o.apiError) && (
+                              <button
+                                onClick={() => handleRetryOrder(o)}
+                                className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-[10px] rounded-lg border border-amber-500/30"
+                              >
+                                Retry API
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {/* SUB TAB 4: SERVICES MANAGEMENT */}
+              {adminSubTab === 'services' && (
+                <div className="space-y-4">
+                  {/* Service Add/Edit Form Card */}
+                  <div className="glass-card p-4 space-y-3">
+                    <h3 className="font-extrabold text-xs text-white flex items-center justify-between">
+                      <span>{editingServiceId ? 'Edit Service' : 'Add New Service (SMMGen API)'}</span>
+                      {editingServiceId && (
+                        <button
+                          onClick={() => {
+                            setEditingServiceId(null);
+                            setAdminName('');
+                            setAdminCategory('');
+                            setAdminPrice('');
+                            setAdminApiServiceId('');
+                          }}
+                          className="text-[10px] text-red-400 hover:underline"
+                        >
+                          Cancel Edit
+                        </button>
+                      )}
+                    </h3>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="form-label">Service Name</label>
+                        <input
+                          type="text"
+                          className="input-modern text-xs"
+                          placeholder="e.g. Facebook Likes [Instant]"
+                          value={adminName}
+                          onChange={(e) => setAdminName(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label">Category</label>
+                        <input
+                          type="text"
+                          className="input-modern text-xs"
+                          placeholder="e.g. Facebook"
+                          value={adminCategory}
+                          onChange={(e) => setAdminCategory(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="form-label">Price / 1k (৳)</label>
+                        <input
+                          type="number"
+                          className="input-modern text-xs"
+                          placeholder="৳ 25"
+                          value={adminPrice}
+                          onChange={(e) => setAdminPrice(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label">Min Qty</label>
+                        <input
+                          type="number"
+                          className="input-modern text-xs"
+                          value={adminMin}
+                          onChange={(e) => setAdminMin(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label">API Service ID</label>
+                        <input
+                          type="text"
+                          className="input-modern text-xs font-mono"
+                          placeholder="15806"
+                          value={adminApiServiceId}
+                          onChange={(e) => setAdminApiServiceId(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleSaveServiceManual}
+                      disabled={adminSubmitting}
+                      className="btn-primary-solid py-2 text-xs w-full flex items-center justify-center gap-1"
+                    >
+                      {adminSubmitting ? (
+                        <span className="loading-spinner"></span>
+                      ) : (
+                        <>
+                          <i className="fas fa-plus-circle"></i>
+                          <span>{editingServiceId ? 'SAVE SERVICE CHANGES' : 'CREATE SERVICE NOW'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Existing Services List */}
+                  <div className="space-y-2">
+                    {allServices.map((svc) => (
+                      <div key={svc.id} className="p-3 bg-slate-900/80 border border-white/10 rounded-2xl flex items-center justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[9px] bg-blue-500/20 text-blue-300 font-bold px-2 py-0.5 rounded">
+                              {svc.category}
+                            </span>
+                            <span className="text-[9px] font-mono text-slate-400">ID: {svc.id}</span>
+                          </div>
+                          <h4 className="font-extrabold text-xs text-white mt-1">{svc.name}</h4>
+                          <p className="text-[10px] text-emerald-400 font-bold">৳ {svc.price} / 1k</p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setEditingServiceId(svc.id);
+                              setAdminName(svc.name);
+                              setAdminCategory(svc.category);
+                              setAdminPrice(String(svc.price));
+                              setAdminMin(String(svc.min));
+                              setAdminMax(String(svc.max || 100000));
+                              setAdminDesc(svc.desc || '');
+                              setAdminApiServiceId(svc.apiServiceId || '');
+                            }}
+                            className="w-7 h-7 rounded-lg bg-blue-500/20 text-blue-300 flex items-center justify-center text-xs"
+                          >
+                            <i className="fas fa-edit"></i>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteService(svc.id, svc.name)}
+                            className="w-7 h-7 rounded-lg bg-red-500/20 text-red-300 flex items-center justify-center text-xs"
+                          >
+                            <i className="fas fa-trash"></i>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* SUB TAB 5: BROADCAST NOTIFICATIONS */}
+              {adminSubTab === 'notifications' && (
+                <div className="glass-card p-4 space-y-3">
+                  <h3 className="font-extrabold text-xs text-white flex items-center gap-2">
+                    <i className="fas fa-bullhorn text-amber-400"></i>
+                    <span>Post Broadcast Notification to All Users</span>
+                  </h3>
+
+                  <div>
+                    <label className="form-label">Notification Title</label>
+                    <input
+                      type="text"
+                      className="input-modern text-xs"
+                      placeholder="e.g. Special Weekend Deposit Bonus 🎉"
+                      value={broadcastTitle}
+                      onChange={(e) => setBroadcastTitle(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="form-label">Type</label>
+                    <select
+                      className="input-modern text-xs"
+                      value={broadcastType}
+                      onChange={(e) => setBroadcastType(e.target.value as any)}
+                    >
+                      <option value="system">System Notice 🚀</option>
+                      <option value="promo">Promo / Offer 🎉</option>
+                      <option value="deposit">Deposit Update 💳</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="form-label">Message Details</label>
+                    <textarea
+                      rows={3}
+                      className="input-modern text-xs resize-none"
+                      placeholder="Write message to send to all users..."
+                      value={broadcastMessage}
+                      onChange={(e) => setBroadcastMessage(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Broadcast Image / Banner Upload */}
+                  <div className="space-y-2 p-3 bg-black/40 rounded-2xl border border-white/10">
+                    <div className="flex justify-between items-center text-xs">
+                      <label className="font-extrabold text-white flex items-center gap-1.5">
+                        <i className="fas fa-image text-amber-400"></i>
+                        <span>Attach Image / Banner (ছবি সংযুক্ত করুন - ঐচ্ছিক)</span>
+                      </label>
+                      {broadcastImage && (
+                        <button
+                          onClick={() => setBroadcastImage(null)}
+                          className="text-[10px] text-red-400 hover:underline font-bold"
+                        >
+                          Remove Photo
+                        </button>
+                      )}
+                    </div>
+
+                    {broadcastImage ? (
+                      <div className="relative aspect-video w-full rounded-xl overflow-hidden border border-amber-500/40 bg-slate-950">
+                        <img src={broadcastImage} alt="Broadcast Banner Preview" className="w-full h-full object-cover" />
+                        <button
+                          onClick={() => setBroadcastImage(null)}
+                          className="absolute top-2 right-2 w-7 h-7 rounded-full bg-red-600 text-white flex items-center justify-center text-xs shadow hover:scale-110 transition"
+                        >
+                          <i className="fas fa-times"></i>
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center p-3 border-2 border-dashed border-amber-500/30 hover:border-amber-400 bg-amber-500/5 hover:bg-amber-500/10 rounded-xl transition cursor-pointer text-center">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleAdminBroadcastImageUpload}
+                          className="hidden"
+                        />
+                        <i className="fas fa-cloud-arrow-up text-amber-400 text-xl mb-1"></i>
+                        <span className="text-xs font-bold text-white">ব্রডকাস্ট নোটিশের জন্য ছবি আপলোড করুন</span>
+                      </label>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={handleSendBroadcast}
+                    className="btn-primary-solid py-2.5 text-xs w-full flex items-center justify-center gap-2"
+                  >
+                    <i className="fas fa-paper-plane text-xs"></i>
+                    <span>BROADCAST TO ALL USERS</span>
+                  </button>
+                </div>
+              )}
+
+              {/* SUB TAB 6: SUPPORT LINKS */}
+              {adminSubTab === 'links' && (
+                <div className="space-y-4">
+                  <div className="glass-card p-4 space-y-3">
+                    <h3 className="font-extrabold text-xs text-white">Add New Support Link</h3>
+                    <input
+                      type="text"
+                      className="input-modern text-xs"
+                      placeholder="Link Title (e.g. Telegram Channel)"
+                      value={newLinkName}
+                      onChange={(e) => setNewLinkName(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      className="input-modern text-xs"
+                      placeholder="URL (e.g. https://t.me/RF2_SMM)"
+                      value={newLinkUrl}
+                      onChange={(e) => setNewLinkUrl(e.target.value)}
+                    />
+                    <button
+                      onClick={handleAddSupportLink}
+                      className="btn-primary-solid py-2 text-xs w-full flex items-center justify-center gap-1"
+                    >
+                      <i className="fas fa-plus"></i>
+                      <span>ADD LINK</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {supportLinks.map((sl) => (
+                      <div key={sl.id} className="p-3 bg-slate-900/80 border border-white/10 rounded-2xl flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <i className={`${sl.icon} text-blue-400 text-sm`}></i>
+                          <div>
+                            <h4 className="font-extrabold text-xs text-white">{sl.name}</h4>
+                            <p className="text-[10px] text-slate-400 font-mono truncate max-w-[200px]">{sl.url}</p>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleDeleteSupportLink(sl.id)}
+                          className="w-7 h-7 rounded-lg bg-red-500/20 text-red-300 flex items-center justify-center text-xs"
+                        >
+                          <i className="fas fa-trash"></i>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* SUB TAB 7: SETTINGS & BACKUP */}
+              {adminSubTab === 'settings' && (
+                <div className="glass-card p-5 space-y-4">
+                  <h3 className="font-extrabold text-xs text-white flex items-center gap-2">
+                    <i className="fas fa-sliders-h text-blue-400"></i>
+                    <span>SMM Panel API Configuration</span>
+                  </h3>
+
+                  <div>
+                    <label className="form-label">SMMGen API Key</label>
+                    <input
+                      type="text"
+                      className="input-modern font-mono text-xs"
+                      defaultValue="abb6b46205ede0b57a7c53580646fc7a"
+                      disabled
+                    />
+                  </div>
+
+                  <div>
+                    <label className="form-label">API Base URL</label>
+                    <input
+                      type="text"
+                      className="input-modern font-mono text-xs"
+                      defaultValue="https://my.smmgen.com/api/v2"
+                      disabled
+                    />
+                  </div>
+
+                  <div className="pt-2 border-t border-white/10">
+                    <h4 className="font-extrabold text-xs text-white mb-2">Data Export & Backup</h4>
+                    <button
+                      onClick={handleExportBackup}
+                      className="btn-secondary-solid py-2 text-xs flex items-center justify-center gap-2"
+                    >
+                      <i className="fas fa-download"></i>
+                      <span>DOWNLOAD FULL PANEL BACKUP (JSON)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* SUB TAB 8: TASKS & SCREENSHOT PROOFS */}
+              {adminSubTab === 'tasks' && (
+                <div className="space-y-5">
+                  {/* Admin Tasks Header Banner */}
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-950/60 via-yellow-900/40 to-slate-900 border border-amber-500/30 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 text-base">
+                        <i className="fas fa-tasks"></i>
+                      </div>
+                      <div>
+                        <h3 className="font-black text-sm text-white">Task Proofs & Screenshots (প্রুফ ও স্ক্রিনশট রিভিউ)</h3>
+                        <p className="text-[10px] text-amber-200/80">ইউজারদের জমা দেওয়া টাস্ক প্রুফ ও সর্বোচ্চ ৫টি স্ক্রিনশট রিভিউ করে রিওয়ার্ড এপ্রুভ করুন</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 font-mono text-xs font-bold text-amber-400 bg-black/40 px-3 py-1.5 rounded-xl border border-amber-500/20">
+                      <span>Pending Reviews:</span>
+                      <span className="text-white bg-amber-500 px-2 py-0.5 rounded-md text-[11px] text-black font-black">
+                        {allTaskSubmissions.filter((s) => s.status === 'Pending').length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Section 1: Task Proof Submissions Review */}
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="font-extrabold text-xs text-white uppercase tracking-wider flex items-center gap-2">
+                        <span>User Task Submissions ({allTaskSubmissions.length})</span>
+                      </h4>
+
+                      {/* Filter Buttons */}
+                      <div className="flex bg-slate-900 p-1 rounded-xl border border-white/10 gap-1 text-[11px]">
+                        {(['all', 'Pending', 'Approved', 'Rejected'] as const).map((f) => (
+                          <button
+                            key={f}
+                            onClick={() => setAdminTaskFilter(f)}
+                            className={`px-2.5 py-1 rounded-lg font-extrabold transition ${
+                              adminTaskFilter === f
+                                ? 'bg-amber-500 text-black shadow'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            {f === 'all' ? 'All' : f}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {allTaskSubmissions.filter((s) => (adminTaskFilter === 'all' ? true : s.status === adminTaskFilter)).length === 0 ? (
+                      <div className="glass-card p-8 text-center">
+                        <i className="fas fa-file-circle-xmark text-3xl text-slate-600 mb-2"></i>
+                        <p className="text-xs font-bold text-slate-400">No task submissions found in this filter.</p>
+                      </div>
+                    ) : (
+                      allTaskSubmissions
+                        .filter((s) => (adminTaskFilter === 'all' ? true : s.status === adminTaskFilter))
+                        .map((sub) => {
+                          return (
+                            <div
+                              key={sub.id}
+                              className={`glass-card p-4 space-y-3 border transition-all ${
+                                sub.status === 'Pending'
+                                  ? 'border-amber-500/40 bg-amber-950/10'
+                                  : sub.status === 'Approved'
+                                  ? 'border-emerald-500/30'
+                                  : 'border-red-500/30'
+                              }`}
+                            >
+                              {/* Header info */}
+                              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-2.5">
+                                <div className="flex items-center gap-2.5">
+                                  <div className="w-8 h-8 rounded-xl bg-slate-800 border border-white/10 flex items-center justify-center text-amber-400 font-extrabold text-xs">
+                                    <i className="fas fa-user-check"></i>
+                                  </div>
+                                  <div>
+                                    <h4 className="font-extrabold text-xs text-white flex items-center gap-1.5">
+                                      <span>{sub.userName || 'User'}</span>
+                                      <span className="font-mono text-[9px] text-slate-400 bg-white/5 px-1.5 py-0.5 rounded">
+                                        UID: {sub.userId ? sub.userId.slice(0, 8) : 'N/A'}
+                                      </span>
+                                    </h4>
+                                    <p className="text-[10px] text-amber-300 font-semibold">{sub.taskTitle}</p>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-black text-emerald-400 font-mono bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
+                                    +৳ {sub.reward}
+                                  </span>
+                                  <span
+                                    className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase border ${
+                                      sub.status === 'Approved'
+                                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                        : sub.status === 'Pending'
+                                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30 animate-pulse'
+                                        : 'bg-red-500/20 text-red-400 border-red-500/30'
+                                    }`}
+                                  >
+                                    {sub.status}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* User Submitted Proof Text */}
+                              {sub.proofText && (
+                                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-xs text-slate-300 space-y-1">
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
+                                    <i className="fas fa-comment-dots text-amber-400 mr-1"></i> User Submitted Note / ID:
+                                  </span>
+                                  <p className="font-mono text-white whitespace-pre-wrap select-all">{sub.proofText}</p>
+                                </div>
+                              )}
+
+                              {/* Screenshots Gallery Grid (Up to 5 Screenshots) */}
+                              <div>
+                                <span className="text-[10px] font-extrabold text-slate-300 flex items-center gap-1.5 mb-2">
+                                  <i className="fas fa-images text-amber-400"></i>
+                                  <span>Submitted Screenshots ({sub.screenshots ? sub.screenshots.length : 0} / 5):</span>
+                                  <span className="text-[9px] text-slate-400 font-normal">(Click image to zoom full screen)</span>
+                                </span>
+
+                                {!sub.screenshots || sub.screenshots.length === 0 ? (
+                                  <div className="p-3 rounded-xl bg-slate-900/60 border border-white/5 text-center text-xs text-slate-500">
+                                    No screenshot images attached
+                                  </div>
+                                ) : (
+                                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                                    {sub.screenshots.map((imgSrc, imgIdx) => (
+                                      <div
+                                        key={imgIdx}
+                                        onClick={() => setSelectedScreenshotPreview(imgSrc)}
+                                        className="group relative aspect-video sm:aspect-square bg-slate-950 rounded-xl overflow-hidden border border-amber-500/30 hover:border-amber-400 cursor-pointer shadow transition active:scale-95"
+                                      >
+                                        <img
+                                          src={imgSrc}
+                                          alt={`Screenshot ${imgIdx + 1}`}
+                                          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                                        />
+                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                                          <i className="fas fa-search-plus text-white text-base"></i>
+                                        </div>
+                                        <span className="absolute bottom-1 right-1 bg-black/80 text-[8px] font-mono text-amber-300 px-1.5 py-0.5 rounded font-bold">
+                                          #{imgIdx + 1}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Submission Date & Admin Actions */}
+                              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5 text-[10px] text-slate-400">
+                                <span className="font-mono">Submitted: {sub.submittedAt || 'Recently'}</span>
+
+                                {sub.status === 'Pending' && (
+                                  <div className="flex gap-2 w-full sm:w-auto">
+                                    <button
+                                      onClick={() => handleApproveTaskSubmission(sub)}
+                                      className="flex-1 sm:flex-initial px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-xs rounded-xl shadow transition active:scale-95 flex items-center justify-center gap-1.5"
+                                    >
+                                      <i className="fas fa-check-circle"></i>
+                                      <span>APPROVE & CREDIT (৳{sub.reward})</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectTaskSubmission(sub.id)}
+                                      className="px-3 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 font-bold text-xs rounded-xl transition active:scale-95 flex items-center justify-center gap-1"
+                                    >
+                                      <i className="fas fa-times-circle"></i>
+                                      <span>REJECT</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                    )}
+                  </div>
+
+                  {/* Section 2: Create & Manage Custom Tasks */}
+                  <div className="glass-card p-4 space-y-4">
+                    <h4 className="font-extrabold text-xs text-white uppercase tracking-wider flex items-center gap-2">
+                      <i className="fas fa-plus-circle text-amber-400"></i>
+                      <span>Add New System Task (নতুন টাস্ক যোগ করুন)</span>
+                    </h4>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="form-label">Task Title (টাস্ক এর নাম)</label>
+                        <input
+                          type="text"
+                          className="input-modern text-xs"
+                          placeholder="e.g. YouTube Channel Subscribe"
+                          value={newTaskTitle}
+                          onChange={(e) => setNewTaskTitle(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label">Reward Amount (রিওয়ার্ড ৳)</label>
+                        <input
+                          type="number"
+                          className="input-modern text-xs font-mono"
+                          placeholder="e.g. 5"
+                          value={newTaskReward}
+                          onChange={(e) => setNewTaskReward(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="form-label">Task Link (টাস্ক এর লিঙ্ক)</label>
+                      <input
+                        type="text"
+                        className="input-modern text-xs font-mono"
+                        placeholder="e.g. https://youtube.com/c/yourchannel"
+                        value={newTaskLink}
+                        onChange={(e) => setNewTaskLink(e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="form-label">Task Description & Instructions</label>
+                      <textarea
+                        rows={2}
+                        className="input-modern text-xs resize-none"
+                        placeholder="e.g. চ্যানেল সাবস্ক্রাইব করে বেল আইকন অন করে ৫টি স্ক্রিনশট পর্যন্ত প্রুফ আপলোড দিন।"
+                        value={newTaskDesc}
+                        onChange={(e) => setNewTaskDesc(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Task Image / Banner File Upload Field */}
+                    <div className="space-y-2 p-3 bg-black/40 rounded-2xl border border-white/10">
+                      <div className="flex justify-between items-center text-xs">
+                        <label className="font-extrabold text-white flex items-center gap-1.5">
+                          <i className="fas fa-image text-amber-400"></i>
+                          <span>Task Image / Banner (টাস্ক এর ছবি বা ব্যানার আপলোড)</span>
+                        </label>
+                        {newTaskImage && (
+                          <button
+                            onClick={() => setNewTaskImage(null)}
+                            className="text-[10px] text-red-400 hover:underline font-bold"
+                          >
+                            Remove Image
+                          </button>
+                        )}
+                      </div>
+
+                      {newTaskImage ? (
+                        <div className="relative aspect-video w-full rounded-xl overflow-hidden border border-amber-500/40 bg-slate-950">
+                          <img src={newTaskImage} alt="Task Banner Preview" className="w-full h-full object-cover" />
+                          <button
+                            onClick={() => setNewTaskImage(null)}
+                            className="absolute top-2 right-2 w-7 h-7 rounded-full bg-red-600 text-white flex items-center justify-center text-xs shadow hover:scale-110 transition"
+                          >
+                            <i className="fas fa-times"></i>
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="flex flex-col items-center justify-center p-3 border-2 border-dashed border-amber-500/30 hover:border-amber-400 bg-amber-500/5 hover:bg-amber-500/10 rounded-xl transition cursor-pointer text-center">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleAdminTaskImageUpload}
+                            className="hidden"
+                          />
+                          <i className="fas fa-file-image text-amber-400 text-xl mb-1"></i>
+                          <span className="text-xs font-bold text-white">ক্লিক করে টাস্ক এর ছবি আপলোড করুন</span>
+                          <span className="text-[9px] text-slate-400">(Upload image/banner for this task)</span>
+                        </label>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={handleCreateAdminTask}
+                      className="btn-primary-solid py-2.5 text-xs w-full flex items-center justify-center gap-2"
+                    >
+                      <i className="fas fa-plus text-xs"></i>
+                      <span>CREATE & PUBLISH TASK</span>
+                    </button>
+
+                    {/* Active System Tasks List */}
+                    <div className="pt-3 border-t border-white/10 space-y-2">
+                      <h5 className="font-extrabold text-xs text-slate-300">Current Active Tasks ({customTasks.length})</h5>
+                      <div className="space-y-2">
+                        {customTasks.map((task) => (
+                          <div key={task.id} className="p-3 rounded-xl bg-slate-900/80 border border-white/5 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5">
+                              {task.image ? (
+                                <img
+                                  src={task.image}
+                                  alt={task.title}
+                                  onClick={() => setSelectedScreenshotPreview(task.image!)}
+                                  className="w-10 h-10 rounded-xl object-cover border border-amber-500/40 cursor-pointer hover:scale-105 transition"
+                                />
+                              ) : (
+                                <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center text-xs">
+                                  <i className={task.icon || 'fas fa-tasks'}></i>
+                                </div>
+                              )}
+                              <div>
+                                <h6 className="font-bold text-xs text-white">{task.title}</h6>
+                                <span className="text-[10px] text-emerald-400 font-mono font-bold">Reward: ৳{task.reward}</span>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => handleDeleteAdminTask(task.id)}
+                              className="w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 flex items-center justify-center text-xs transition"
+                              title="Delete Task"
+                            >
+                              <i className="fas fa-trash-alt"></i>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -2777,6 +5060,475 @@ export default function App() {
             </div>
           )}
 
+          {/* LIVE ORDERS MODAL */}
+          {showLiveOrdersModal && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end sm:justify-center p-0 sm:p-4 animate-fade-in">
+              <div className="bg-[#080d1a] border border-red-500/30 rounded-t-3xl sm:rounded-3xl max-h-[88vh] flex flex-col overflow-hidden shadow-[0_0_50px_rgba(239,68,68,0.25)] w-full max-w-lg mx-auto">
+                {/* Modal Header */}
+                <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/90">
+                  <div className="flex items-center gap-2.5">
+                    <div className="relative w-8 h-8 rounded-xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400">
+                      <i className="fas fa-satellite-dish text-xs animate-pulse"></i>
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping"></span>
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
+                        <span>Live Orders Stream (লাইভ অর্ডার)</span>
+                        <span className="bg-red-500 text-white text-[8px] font-black px-2 py-0.5 rounded-full animate-pulse">
+                          LIVE ⚡
+                        </span>
+                      </h3>
+                      <p className="text-[9px] text-slate-400">Real-time order feed & status monitor</p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowLiveOrdersModal(false)}
+                    className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white"
+                  >
+                    <i className="fas fa-times text-xs"></i>
+                  </button>
+                </div>
+
+                {/* Filter Tabs */}
+                <div className="flex border-b border-white/10 bg-slate-900/50">
+                  <button
+                    onClick={() => setLiveOrdersFilter('all')}
+                    className={`flex-1 py-2.5 text-xs font-extrabold flex items-center justify-center gap-2 transition-all ${
+                      liveOrdersFilter === 'all'
+                        ? 'text-red-400 border-b-2 border-red-400 bg-red-500/10'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <i className="fas fa-globe"></i>
+                    <span>All System Live Orders ({allAdminOrdersList.length || ordersList.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setLiveOrdersFilter('my')}
+                    className={`flex-1 py-2.5 text-xs font-extrabold flex items-center justify-center gap-2 transition-all ${
+                      liveOrdersFilter === 'my'
+                        ? 'text-red-400 border-b-2 border-red-400 bg-red-500/10'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <i className="fas fa-user-check"></i>
+                    <span>My Live Orders ({ordersList.length})</span>
+                  </button>
+                </div>
+
+                {/* Modal Content */}
+                <div className="p-4 overflow-y-auto max-h-[60vh] space-y-3">
+                  {/* Status Banner */}
+                  <div className="p-3 rounded-2xl bg-gradient-to-r from-red-950/40 to-slate-900 border border-red-500/20 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                      <span className="text-slate-300 font-bold text-[11px]">SMM Automated Dispatch: <span className="text-emerald-400">ONLINE</span></span>
+                    </div>
+                    <button
+                      onClick={() => showToast('Refreshed live order feed!', 'success')}
+                      className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-[10px] font-extrabold text-slate-300 border border-white/10 flex items-center gap-1"
+                    >
+                      <i className="fas fa-sync-alt text-[9px]"></i> Refresh
+                    </button>
+                  </div>
+
+                  {(liveOrdersFilter === 'all' ? (allAdminOrdersList.length > 0 ? allAdminOrdersList : ordersList) : ordersList).length === 0 ? (
+                    <div className="text-center py-12">
+                      <i className="fas fa-box-open text-4xl text-slate-600 mb-2"></i>
+                      <p className="text-xs font-bold text-slate-400">No live orders found right now</p>
+                    </div>
+                  ) : (
+                    (liveOrdersFilter === 'all' ? (allAdminOrdersList.length > 0 ? allAdminOrdersList : ordersList) : ordersList).slice(0, 15).map((ord) => {
+                      const platform = getPlatformMeta(ord.service);
+                      const isPending = ord.status.toLowerCase().includes('pending');
+                      const isCompleted = ord.status.toLowerCase().includes('completed') || ord.status.toLowerCase().includes('success');
+                      const isProcessing = ord.status.toLowerCase().includes('process') || ord.status.toLowerCase().includes('progress');
+
+                      return (
+                        <div
+                          key={ord.id}
+                          className="p-3.5 rounded-2xl bg-slate-900/90 border border-white/10 hover:border-red-500/30 transition-all space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <div
+                                className="w-8 h-8 rounded-xl flex items-center justify-center text-sm"
+                                style={{ color: platform.color, backgroundColor: `${platform.color}15` }}
+                              >
+                                <i className={platform.icon}></i>
+                              </div>
+                              <div>
+                                <h4 className="font-extrabold text-xs text-white line-clamp-1">{ord.service}</h4>
+                                <span className="text-[9px] font-mono text-slate-400">ID: #{ord.id.slice(0, 8)}</span>
+                              </div>
+                            </div>
+
+                            <span
+                              className={`text-[9px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                                isCompleted
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                  : isProcessing
+                                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30 animate-pulse'
+                                  : isPending
+                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                                  : 'bg-blue-500/10 text-blue-400 border-blue-500/30'
+                              }`}
+                            >
+                              {ord.status.toUpperCase()}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-[10px] bg-black/30 p-2 rounded-xl border border-white/5">
+                            <div>
+                              <span className="text-slate-400 block">Quantity:</span>
+                              <span className="font-extrabold text-white font-mono">{ord.qty.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block">Cost:</span>
+                              <span className="font-extrabold text-emerald-400 font-mono">৳ {ord.cost.toFixed(2)}</span>
+                            </div>
+                          </div>
+
+                          {/* Live Progress Indicator */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-[9px] text-slate-400 font-mono">
+                              <span>Live Dispatch Status</span>
+                              <span className="text-red-400 font-bold">{isCompleted ? '100%' : isProcessing ? '65%' : '20%'}</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full transition-all duration-500 rounded-full ${
+                                  isCompleted ? 'bg-emerald-400' : isProcessing ? 'bg-cyan-400 animate-pulse' : 'bg-amber-400'
+                                }`}
+                                style={{ width: isCompleted ? '100%' : isProcessing ? '65%' : '20%' }}
+                              ></div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TASKS & REWARDS MODAL WITH SCREENSHOT PROOF UPLOAD */}
+          {showTasksModal && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end sm:justify-center p-0 sm:p-4 animate-fade-in">
+              <div className="bg-[#0b1329] border border-amber-500/30 rounded-t-3xl sm:rounded-3xl max-h-[85vh] h-[85vh] sm:h-auto flex flex-col overflow-hidden shadow-[0_0_50px_rgba(245,158,11,0.25)] w-full max-w-lg mx-auto">
+                {/* Modal Header */}
+                <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/90 flex-shrink-0">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                      <i className="fas fa-tasks text-xs"></i>
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
+                        <span>Daily Tasks & Bonus (টাস্ক প্রুফ ও স্ক্রিনশট)</span>
+                        <span className="bg-amber-500 text-black text-[8px] font-black px-2 py-0.5 rounded-full">
+                          EARN ৳
+                        </span>
+                      </h3>
+                      <p className="text-[9px] text-slate-400">টাস্ক সম্পন্ন করে প্রুফ ও স্ক্রিনশট আপলোড দিয়ে রিওয়ার্ড পান</p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowTasksModal(false)}
+                    className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white"
+                  >
+                    <i className="fas fa-times text-xs"></i>
+                  </button>
+                </div>
+
+                {/* Banner Summary */}
+                <div className="p-4 bg-gradient-to-r from-amber-950/50 via-yellow-900/30 to-slate-900 border-b border-white/5 flex items-center justify-between flex-shrink-0">
+                  <div>
+                    <span className="text-[10px] text-amber-300/80 font-bold uppercase tracking-wider block">Total Tasks Rewarded</span>
+                    <h4 className="text-lg font-black text-amber-400 font-mono">
+                      ৳ {allTaskSubmissions
+                        .filter((s) => s.userId === currentUser?.uid && s.status === 'Approved')
+                        .reduce((sum, s) => sum + (s.reward || 0), 0)
+                        .toFixed(2)}
+                    </h4>
+                  </div>
+                  <span className="text-xs font-bold text-slate-300 bg-amber-500/10 px-3 py-1.5 rounded-xl border border-amber-500/20">
+                    {allTaskSubmissions.filter((s) => s.userId === currentUser?.uid && s.status === 'Approved').length} Tasks Completed 🎉
+                  </span>
+                </div>
+
+                {/* Tasks List */}
+                <div className="p-4 overflow-y-auto flex-1 min-h-0 space-y-3.5 overscroll-contain pb-12">
+                  {customTasks.map((task) => {
+                    const userSub = allTaskSubmissions.find(
+                      (s) => s.taskId === task.id && s.userId === currentUser?.uid
+                    );
+
+                    return (
+                      <div key={task.id} className="p-3.5 rounded-2xl bg-slate-900/90 border border-white/10 space-y-3">
+                        {/* Task Banner Image if provided by Admin */}
+                        {task.image && (
+                          <div
+                            onClick={() => setSelectedScreenshotPreview(task.image!)}
+                            className="w-full aspect-video rounded-xl overflow-hidden border border-amber-500/30 cursor-pointer group relative bg-black/60 shadow"
+                          >
+                            <img src={task.image} alt={task.title} className="w-full h-full object-cover group-hover:scale-105 transition" />
+                            <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                              <i className="fas fa-search-plus text-white text-sm"></i>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-sm border border-amber-500/30 flex-shrink-0">
+                              <i className={task.icon || 'fas fa-tasks'}></i>
+                            </div>
+                            <div>
+                              <h4 className="font-extrabold text-xs text-white">{task.title}</h4>
+                              <p className="text-[10px] text-slate-400">{task.description}</p>
+                            </div>
+                          </div>
+                          <span className="text-xs font-black text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20 flex-shrink-0">
+                            +৳ {task.reward.toFixed(2)}
+                          </span>
+                        </div>
+
+                        {/* Task Action & Proof Status */}
+                        <div className="flex flex-wrap gap-2 pt-1 border-t border-white/5">
+                          {task.link && task.link !== '#' && (
+                            <a
+                              href={task.link}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-2 rounded-xl bg-sky-600/30 hover:bg-sky-600/50 text-sky-300 text-[11px] font-extrabold flex items-center justify-center gap-1.5 border border-sky-500/30"
+                            >
+                              <i className="fas fa-external-link-alt text-[10px]"></i> VISIT LINK
+                            </a>
+                          )}
+
+                          {userSub ? (
+                            <div className="flex-1 flex items-center justify-end">
+                              {userSub.status === 'Approved' && (
+                                <span className="w-full py-2 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-extrabold text-center flex items-center justify-center gap-1.5">
+                                  <i className="fas fa-check-circle text-emerald-400"></i> APPROVED & REWARDED 🎉
+                                </span>
+                              )}
+                              {userSub.status === 'Pending' && (
+                                <span className="w-full py-2 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-extrabold text-center flex items-center justify-center gap-1.5 animate-pulse">
+                                  <i className="fas fa-clock text-amber-400"></i> যাঁচাই চলছে (PENDING REVIEW)
+                                </span>
+                              )}
+                              {userSub.status === 'Rejected' && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedTaskForProof(task);
+                                    setTaskProofNotes('');
+                                    setTaskProofScreenshots([]);
+                                  }}
+                                  className="w-full py-2 rounded-xl bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/30 text-[11px] font-extrabold flex items-center justify-center gap-1.5 transition active:scale-95"
+                                >
+                                  <i className="fas fa-redo"></i> RE-SUBMIT PROOF (REJECTED)
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setSelectedTaskForProof(task);
+                                setTaskProofNotes('');
+                                setTaskProofScreenshots([]);
+                              }}
+                              className="flex-1 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-black text-[11px] font-black flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition"
+                            >
+                              <i className="fas fa-camera"></i>
+                              <span>প্রুফ ও স্ক্রিনশট দিন (SUBMIT PROOF)</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TASK SCREENSHOT PROOF UPLOAD MODAL */}
+          {selectedTaskForProof && (
+            <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-md flex flex-col justify-center p-3 sm:p-4 animate-fade-in">
+              <div className="bg-[#0b1329] border border-amber-500/40 rounded-3xl max-h-[92vh] flex flex-col overflow-hidden shadow-[0_0_60px_rgba(245,158,11,0.3)] w-full max-w-lg mx-auto">
+                {/* Header */}
+                <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/90">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 text-sm">
+                      <i className="fas fa-upload"></i>
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-xs text-white">
+                        Submit Proof: {selectedTaskForProof.title}
+                      </h3>
+                      <p className="text-[10px] text-amber-300 font-mono">Reward: +৳{selectedTaskForProof.reward.toFixed(2)}</p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setSelectedTaskForProof(null);
+                      setTaskProofScreenshots([]);
+                      setTaskProofNotes('');
+                    }}
+                    className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white"
+                  >
+                    <i className="fas fa-times text-xs"></i>
+                  </button>
+                </div>
+
+                <div className="p-4 overflow-y-auto flex-1 min-h-0 space-y-4 overscroll-contain pb-10">
+                  {/* Task Instructions */}
+                  <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200/90 space-y-1">
+                    <span className="font-bold block text-amber-400">
+                      <i className="fas fa-info-circle mr-1"></i> নির্দেশাবলী:
+                    </span>
+                    <p className="text-[11px] leading-relaxed">
+                      টাস্ক সম্পন্ন করার প্রমাণ হিসেবে সর্বোচ্চ ৫টি পর্যন্ত স্ক্রিনশট আপলোড করতে পারবেন। সাথে আপনার আইডি বা নোট লিখে সাবমিট দিন।
+                    </p>
+                  </div>
+
+                  {/* Proof Text Input */}
+                  <div>
+                    <label className="form-label">Proof Details / User ID / Notes (ঐচ্ছিক তথ্য)</label>
+                    <textarea
+                      rows={2}
+                      className="input-modern text-xs resize-none"
+                      placeholder="e.g. My Telegram Username: @john, FB Name: Rahul"
+                      value={taskProofNotes}
+                      onChange={(e) => setTaskProofNotes(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Screenshot File Upload Box (Up to 5 Screenshots) */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-extrabold text-white flex items-center gap-1.5">
+                        <i className="fas fa-images text-amber-400"></i>
+                        <span>Upload Screenshots (প্রুফ স্ক্রিনশট)</span>
+                      </span>
+                      <span className={`font-mono text-[10px] font-bold ${taskProofScreenshots.length >= 5 ? 'text-amber-400' : 'text-slate-400'}`}>
+                        {taskProofScreenshots.length} / 5 Screenshots
+                      </span>
+                    </div>
+
+                    {/* Upload Drop Button */}
+                    <label
+                      className={`relative flex flex-col items-center justify-center p-4 border-2 border-dashed rounded-2xl transition cursor-pointer text-center ${
+                        taskProofScreenshots.length >= 5
+                          ? 'border-slate-700 bg-slate-900/50 opacity-60 cursor-not-allowed'
+                          : 'border-amber-500/40 hover:border-amber-400 bg-amber-500/5 hover:bg-amber-500/10'
+                      }`}
+                    >
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={handleScreenshotUpload}
+                        disabled={taskProofScreenshots.length >= 5}
+                        className="hidden"
+                      />
+                      <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-base mb-1.5 border border-amber-500/30">
+                        <i className="fas fa-cloud-arrow-up"></i>
+                      </div>
+                      <span className="text-xs font-bold text-white">
+                        {taskProofScreenshots.length >= 5 ? 'Maximum 5 Screenshots Uploaded' : 'ক্লিক করে স্ক্রিনশট নির্বাচন করুন'}
+                      </span>
+                      <span className="text-[9px] text-slate-400 mt-0.5">
+                        (You can upload up to 5 screenshot proof photos)
+                      </span>
+                    </label>
+
+                    {/* Screenshots Preview Thumbnails Grid */}
+                    {taskProofScreenshots.length > 0 && (
+                      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 pt-2">
+                        {taskProofScreenshots.map((imgSrc, idx) => (
+                          <div
+                            key={idx}
+                            className="group relative aspect-square rounded-xl overflow-hidden border border-amber-500/40 bg-black/60 shadow"
+                          >
+                            <img
+                              src={imgSrc}
+                              alt={`Proof ${idx + 1}`}
+                              className="w-full h-full object-cover cursor-pointer hover:scale-105 transition"
+                              onClick={() => setSelectedScreenshotPreview(imgSrc)}
+                            />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveScreenshot(idx);
+                              }}
+                              className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-600 text-white flex items-center justify-center text-[10px] shadow hover:scale-110 transition"
+                              title="Delete screenshot"
+                            >
+                              <i className="fas fa-times"></i>
+                            </button>
+                            <span className="absolute bottom-1 left-1 bg-black/80 text-[8px] font-mono text-amber-300 px-1 rounded font-bold">
+                              #{idx + 1}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Submit Button */}
+                  <button
+                    onClick={handleSubmitTaskProof}
+                    disabled={taskSubmitting}
+                    className="w-full py-3 rounded-2xl bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600 hover:from-amber-400 hover:to-yellow-400 text-black font-black text-xs tracking-wider shadow-lg transition active:scale-95 flex items-center justify-center gap-2 mt-2"
+                  >
+                    {taskSubmitting ? (
+                      <span className="loading-spinner"></span>
+                    ) : (
+                      <>
+                        <i className="fas fa-paper-plane text-xs"></i>
+                        <span>SUBMIT TASK PROOF FOR VERIFICATION</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* LIGHTBOX FULLSCREEN SCREENSHOT PREVIEW MODAL */}
+          {selectedScreenshotPreview && (
+            <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-3 animate-fade-in">
+              <div className="relative max-w-4xl w-full flex flex-col items-center justify-center">
+                {/* Close Button */}
+                <button
+                  onClick={() => setSelectedScreenshotPreview(null)}
+                  className="absolute -top-12 right-0 w-10 h-10 rounded-full bg-white/10 border border-white/20 text-white flex items-center justify-center hover:bg-white/20 text-base shadow-lg z-10 transition active:scale-95"
+                >
+                  <i className="fas fa-times"></i>
+                </button>
+
+                {/* Screenshot Image */}
+                <div className="bg-slate-950 p-2 rounded-2xl border border-white/20 shadow-2xl max-h-[85vh] overflow-hidden flex items-center justify-center">
+                  <img
+                    src={selectedScreenshotPreview}
+                    alt="Full Screenshot Proof Preview"
+                    className="max-h-[80vh] w-auto object-contain rounded-xl"
+                  />
+                </div>
+
+                <p className="text-[10px] font-mono text-slate-400 mt-3 flex items-center gap-1.5">
+                  <i className="fas fa-expand text-amber-400"></i>
+                  <span>Full High-Resolution Screenshot Proof View</span>
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* BOTTOM NAVIGATION */}
           <nav className="bottom-nav-premium">
             <div
@@ -2810,14 +5562,32 @@ export default function App() {
               <span>Funds</span>
             </div>
             <div
-              className={`nav-item-premium ${activeTab === 'support' ? 'active' : ''}`}
+              className={`nav-item-premium ${activeTab === 'profile' ? 'active' : ''}`}
               onClick={() => {
-                setActiveTab('support');
+                setActiveTab('profile');
                 haptic('light');
               }}
             >
-              <i className="fas fa-headset"></i>
-              <span>Support</span>
+              {userPhotoURL || currentUser?.photoURL ? (
+                <img
+                  src={userPhotoURL || currentUser?.photoURL}
+                  alt="Profile"
+                  className="w-5 h-5 rounded-full object-cover border border-amber-400"
+                />
+              ) : (
+                <i className="fas fa-user-circle"></i>
+              )}
+              <span>Profile</span>
+            </div>
+            <div
+              className={`nav-item-premium ${activeTab === 'admin' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('admin');
+                haptic('heavy');
+              }}
+            >
+              <i className="fas fa-crown text-amber-400"></i>
+              <span>Admin</span>
             </div>
           </nav>
         </div>
