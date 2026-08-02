@@ -206,6 +206,14 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [profileSubmitting, setProfileSubmitting] = useState(false);
 
+  // Check if current logged in user is admin (rashal117)
+  const isAdminUser = Boolean(
+    currentUser && (
+      currentUser.username?.toLowerCase() === 'rashal117' ||
+      currentUser.name?.toLowerCase() === 'rashal117'
+    )
+  );
+
   // Home Page Order Form State
   const [allServices, setAllServices] = useState<ServiceData[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
@@ -2370,22 +2378,24 @@ export default function App() {
                   )}
                 </button>
 
-                {/* Admin Mode Toggle Button */}
-                <button
-                  onClick={() => {
-                    setActiveTab(activeTab === 'admin' ? 'home' : 'admin');
-                    haptic('heavy');
-                  }}
-                  className={`relative px-3 py-1.5 rounded-xl border flex items-center gap-1.5 font-extrabold text-[10px] cursor-pointer transition active:scale-95 ${
-                    activeTab === 'admin'
-                      ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.5)]'
-                      : 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
-                  }`}
-                  title="Admin Panel (এডমিন প্যানেল)"
-                >
-                  <i className="fas fa-crown text-amber-400"></i>
-                  <span>ADMIN</span>
-                </button>
+                {/* Admin Mode Toggle Button - Only shown for rashal117 */}
+                {isAdminUser && (
+                  <button
+                    onClick={() => {
+                      setActiveTab(activeTab === 'admin' ? 'home' : 'admin');
+                      haptic('heavy');
+                    }}
+                    className={`relative px-3 py-1.5 rounded-xl border flex items-center gap-1.5 font-extrabold text-[10px] cursor-pointer transition active:scale-95 ${
+                      activeTab === 'admin'
+                        ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.5)]'
+                        : 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
+                    }`}
+                    title="Admin Panel (এডমিন প্যানেল)"
+                  >
+                    <i className="fas fa-crown text-amber-400"></i>
+                    <span>ADMIN</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -3502,7 +3512,7 @@ export default function App() {
           )}
 
           {/* ADMIN TAB */}
-          {activeTab === 'admin' && (
+          {activeTab === 'admin' && isAdminUser && (
             <section className="px-4 sm:px-6 mt-4 pb-20 animate-fade-in">
               {/* Top Banner */}
               <div className="p-5 rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-amber-500/30 shadow-[0_0_30px_rgba(245,158,11,0.2)] mb-5">
@@ -5579,16 +5589,18 @@ export default function App() {
               )}
               <span>Profile</span>
             </div>
-            <div
-              className={`nav-item-premium ${activeTab === 'admin' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab('admin');
-                haptic('heavy');
-              }}
-            >
-              <i className="fas fa-crown text-amber-400"></i>
-              <span>Admin</span>
-            </div>
+            {isAdminUser && (
+              <div
+                className={`nav-item-premium ${activeTab === 'admin' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab('admin');
+                  haptic('heavy');
+                }}
+              >
+                <i className="fas fa-crown text-amber-400"></i>
+                <span>Admin</span>
+              </div>
+            )}
 
           </nav>
         </div>
